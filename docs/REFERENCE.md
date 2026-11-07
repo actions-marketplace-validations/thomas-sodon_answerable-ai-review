@@ -117,7 +117,7 @@ the action last, or set up your own Python again after it, if that matters.
 
 The examples use the moving `@v0` tag for brevity. Since the action
 receives an Anthropic credential, pin it to a full commit SHA in your own
-workflows (`uses: thomas-sodon/answerable@<commit-sha>`) so a later change
+workflows (`uses: thomas-sodon/answerable-ai-review@<commit-sha>`) so a later change
 to a moving tag cannot run with your secret unreviewed.
 
 ## De-duplication rules

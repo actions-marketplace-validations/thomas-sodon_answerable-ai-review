@@ -1,4 +1,4 @@
-name: Answerable
+name: Answerable AI Review
 description: AI PR review with Claude that blocks the merge until every finding is fixed, disputed or tracked.
 author: thomas-sodon
 branding:

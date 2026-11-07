@@ -7,7 +7,7 @@ review, and posts the findings as inline review comments. The check fails while
 new findings are unaddressed, so a PR stays blocked until someone fixes,
 disputes or tracks each one.
 
-[![CI](https://github.com/thomas-sodon/answerable/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-sodon/answerable/actions/workflows/ci.yml)
+[![CI](https://github.com/thomas-sodon/answerable-ai-review/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-sodon/answerable-ai-review/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
@@ -38,10 +38,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       # Optional: fail if earlier findings are still unanswered. Run it before
       # the review so it sees the state as of this push.
-      - uses: thomas-sodon/answerable@v0
+      - uses: thomas-sodon/answerable-ai-review@v0
         with:
           mode: replies
-      - uses: thomas-sodon/answerable@v0
+      - uses: thomas-sodon/answerable-ai-review@v0
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # or: claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -87,7 +87,7 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
   default.
 - **Pin what holds your secret.** Because the action receives an Anthropic
   credential, pin it to a full commit SHA
-  (`uses: thomas-sodon/answerable@<commit-sha>`) so a later change to
+  (`uses: thomas-sodon/answerable-ai-review@<commit-sha>`) so a later change to
   `main` cannot run with your secret unreviewed.
 - **What leaves your runner.** The PR title, description and diff (and any file
   the model reads) are sent to Anthropic for the review. Pull requests from
@@ -99,7 +99,7 @@ Requires Python 3.11+ and an authenticated [GitHub CLI](https://cli.github.com/)
 (`gh auth login`, or `GH_TOKEN` in the environment).
 
 ```bash
-pip install "git+https://github.com/thomas-sodon/answerable.git"
+pip install "git+https://github.com/thomas-sodon/answerable-ai-review.git"
 answerable --repo owner/repo --pr 42 --dry-run   # print findings, post nothing
 answerable --repo owner/repo --pr 42             # review and post
 ```
@@ -111,8 +111,8 @@ documented in [docs/REFERENCE.md](docs/REFERENCE.md).
 ## Development
 
 ```bash
-git clone https://github.com/thomas-sodon/answerable.git
-cd answerable
+git clone https://github.com/thomas-sodon/answerable-ai-review.git
+cd answerable-ai-review
 pip install -e ".[dev]"
 ruff check src/ tests/
 mypy src/

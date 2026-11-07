@@ -20,8 +20,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thomas-sodon/answerable"
-Issues = "https://github.com/thomas-sodon/answerable/issues"
+Homepage = "https://github.com/thomas-sodon/answerable-ai-review"
+Issues = "https://github.com/thomas-sodon/answerable-ai-review/issues"
 
 [project.optional-dependencies]
 dev = [

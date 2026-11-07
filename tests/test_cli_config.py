@@ -22,11 +22,10 @@ class TestConfigFiles:
             result = _load_review_defaults()
         assert result["max_files"] == 7
 
-    def test_answerable_toml_before_maestro_toml(self, tmp_path: Path) -> None:
+    def test_answerable_toml_is_read(self, tmp_path: Path) -> None:
         cwd = tmp_path / "cwd"
         cwd.mkdir()
         (cwd / "answerable.toml").write_text("[review]\ngh_timeout = 11\n")
-        (cwd / "maestro.toml").write_text("[review]\ngh_timeout = 22\n")
         with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result["gh_timeout"] == 11

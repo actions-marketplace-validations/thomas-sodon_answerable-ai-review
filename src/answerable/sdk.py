@@ -2,7 +2,7 @@
 
 Provides QueryOptions, QueryResult, and a streaming query() function with
 retries for transient failures; it keeps no session file log, which a CI run
-does not need.  Adapted from maestro/sdk.py in thomas-sodon/maestro-agent.
+does not need.
 """
 
 from __future__ import annotations

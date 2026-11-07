@@ -80,12 +80,12 @@ def _normalize_title(title: str) -> frozenset[str]:
 
 # Stable delimiter pair wrapping the overflow-findings list in the review body.
 # Overflow findings have no inline thread, so downstream consumers (for example
-# the Maestro agent, thomas-sodon/maestro-agent) parse the finding lines out of
+# a comment-remediation agent) parse the finding lines out of
 # the body between these sentinels.  The pair and the ``of-`` fingerprint scheme
 # below are a wire contract those consumers match verbatim, so changing either
 # is a breaking change.
-_OVERFLOW_SENTINEL_OPEN = "<!-- maestro:overflow -->"
-_OVERFLOW_SENTINEL_CLOSE = "<!-- /maestro:overflow -->"
+_OVERFLOW_SENTINEL_OPEN = "<!-- answerable:overflow -->"
+_OVERFLOW_SENTINEL_CLOSE = "<!-- /answerable:overflow -->"
 
 # Header the overflow list is rendered under (see :meth:`_build_review_payload`).
 # Predates the sentinel pair; the read-side parser falls back to it so an
@@ -98,7 +98,7 @@ _OVERFLOW_LEGACY_HEADER = "**Additional findings** (could not be placed inline):
 # ``of-<hash> — <verdict>`` lines under this sentinel on one PR comment.  A
 # fingerprint listed there is treated as answered by the reply-coverage gate.
 # Part of the same wire contract: downstream consumers match it verbatim.
-_OVERFLOW_ACK_SENTINEL = "<!-- maestro:overflow-ack -->"
+_OVERFLOW_ACK_SENTINEL = "<!-- answerable:overflow-ack -->"
 
 
 def _overflow_fingerprint(finding: ReviewFinding) -> str:

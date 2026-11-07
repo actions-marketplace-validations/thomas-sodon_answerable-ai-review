@@ -67,7 +67,6 @@ def _config_candidates() -> list[Path]:
         candidates.append(Path(explicit))
     candidates.extend((
         Path.cwd() / "answerable.toml",
-        Path.cwd() / "maestro.toml",
     ))
     return candidates
 

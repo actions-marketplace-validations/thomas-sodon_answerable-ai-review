@@ -37,9 +37,9 @@ from answerable.sdk import QueryResult, QueryUsage
 # ------------------------------------------------------------------
 
 SAMPLE_DIFF = """\
-diff --git a/maestro/review.py b/maestro/review.py
---- a/maestro/review.py
-+++ b/maestro/review.py
+diff --git a/app/review.py b/app/review.py
+--- a/app/review.py
++++ b/app/review.py
 @@ -10,6 +10,8 @@ import logging
  import json
  import re
@@ -99,9 +99,9 @@ diff --git a/package-lock.json b/package-lock.json
  {
 +  "new": true
  }
-diff --git a/maestro/real.py b/maestro/real.py
---- a/maestro/real.py
-+++ b/maestro/real.py
+diff --git a/app/real.py b/app/real.py
+--- a/app/real.py
++++ b/app/real.py
 @@ -1,3 +1,4 @@
  code
 +new_code
@@ -200,7 +200,7 @@ def test_truncate_diff_filters_lockfiles() -> None:
     reviewer = PRReviewer("owner/repo", max_diff_chars=100_000)
     result = reviewer._truncate_diff(LOCKFILE_DIFF)
     assert "package-lock.json" not in result
-    assert "maestro/real.py" in result
+    assert "app/real.py" in result
 
 
 def test_truncate_diff_large() -> None:
@@ -232,17 +232,17 @@ def test_truncate_diff_zero_budget() -> None:
 def test_parse_diff_lines_added() -> None:
     """Added lines are identified as commentable."""
     lines = PRReviewer._parse_diff_lines(SAMPLE_DIFF)
-    assert "maestro/review.py" in lines
+    assert "app/review.py" in lines
     # Lines 13 and 14 are the added lines (+import os, +import sys)
-    assert 13 in lines["maestro/review.py"]
-    assert 14 in lines["maestro/review.py"]
+    assert 13 in lines["app/review.py"]
+    assert 14 in lines["app/review.py"]
 
 
 def test_parse_diff_lines_context() -> None:
     """Context lines (unchanged) are also commentable."""
     lines = PRReviewer._parse_diff_lines(SAMPLE_DIFF)
     # Context lines around the additions should also be present
-    assert 10 in lines["maestro/review.py"]
+    assert 10 in lines["app/review.py"]
 
 
 def test_parse_diff_lines_multi_file() -> None:
@@ -352,7 +352,7 @@ async def test_review_success() -> None:
         "summary": "Looks good overall",
         "findings": [
             {
-                "file": "maestro/review.py",
+                "file": "app/review.py",
                 "line": 13,
                 "severity": "suggestion",
                 "title": "Unused import",
@@ -850,9 +850,9 @@ def test_coarse_keyed_ack_suppresses_legacy_rendered_finding() -> None:
     # Only the legacy block is still on the PR, so the union's representative
     # carries the legacy handle.
     host.get_pr_review_bodies.return_value = [
-        f"<!-- maestro:overflow -->\n"
+        f"<!-- answerable:overflow -->\n"
         f"- {legacy} **a.py:5** [bug] — Race condition: d\n"
-        f"<!-- /maestro:overflow -->",
+        f"<!-- /answerable:overflow -->",
     ]
     host.get_pr_comment_bodies.return_value = [
         f"{_OVERFLOW_ACK_SENTINEL}\n- {coarse} — {_FIXED_LOCALLY_MARKER}",
@@ -1315,18 +1315,18 @@ def test_post_review_filters_issue_tracked_bugs() -> None:
     """Bug findings tracked by an open issue are excluded from the posted review."""
     host = MagicMock()
     host.list_issues.return_value = [
-        {"title": "Unused import in maestro/review.py", "body": "unused import detected"},
+        {"title": "Unused import in app/review.py", "body": "unused import detected"},
     ]
     host.get_pr_review_threads.return_value = []
     reviewer = _reviewer(host)
     findings = [
         ReviewFinding(
-            file="maestro/review.py", line=13, severity="bug",
+            file="app/review.py", line=13, severity="bug",
             title="Unused import detected",
             description="os is imported but never used", fix_plan="Remove",
         ),
         ReviewFinding(
-            file="maestro/agent.py", line=5, severity="bug",
+            file="app/agent.py", line=5, severity="bug",
             title="Missing null check",
             description="x may be None", fix_plan="Add guard",
         ),
@@ -1352,13 +1352,13 @@ def test_post_review_skips_when_all_bugs_filtered() -> None:
     """When all bug findings are tracked by issues, no review is posted."""
     host = MagicMock()
     host.list_issues.return_value = [
-        {"title": "Unused import in maestro/review.py", "body": "unused import detected"},
+        {"title": "Unused import in app/review.py", "body": "unused import detected"},
     ]
     host.get_pr_review_threads.return_value = []
     reviewer = _reviewer(host)
     findings = [
         ReviewFinding(
-            file="maestro/review.py", line=13, severity="bug",
+            file="app/review.py", line=13, severity="bug",
             title="Unused import detected",
             description="os is imported but never used", fix_plan="Remove",
         ),
@@ -1410,7 +1410,7 @@ def test_extract_keywords_empty() -> None:
 
 
 def _make_finding(
-    file: str = "maestro/review.py",
+    file: str = "app/review.py",
     title: str = "Unused import detected",
 ) -> ReviewFinding:
     return ReviewFinding(
@@ -1422,7 +1422,7 @@ def _make_finding(
 def test_is_finding_tracked_match() -> None:
     issues = [
         {"title": "review.py: unused import and dead code",
-         "body": "maestro/review.py has unused imports that should be cleaned up"},
+         "body": "app/review.py has unused imports that should be cleaned up"},
     ]
     assert PRReviewer._is_finding_tracked(_make_finding(), issues) is True
 
@@ -1430,8 +1430,8 @@ def test_is_finding_tracked_match() -> None:
 def test_is_finding_tracked_no_file_match() -> None:
     """Issue mentions a different file — no match."""
     issues = [
-        {"title": "Unused import in maestro/agent.py",
-         "body": "maestro/agent.py unused import detected"},
+        {"title": "Unused import in app/agent.py",
+         "body": "app/agent.py unused import detected"},
     ]
     assert PRReviewer._is_finding_tracked(_make_finding(), issues) is False
 
@@ -1439,8 +1439,8 @@ def test_is_finding_tracked_no_file_match() -> None:
 def test_is_finding_tracked_no_keyword_overlap() -> None:
     """File matches but title keywords do not overlap enough."""
     issues = [
-        {"title": "Race condition in maestro/review.py",
-         "body": "maestro/review.py has a race condition in the writer"},
+        {"title": "Race condition in app/review.py",
+         "body": "app/review.py has a race condition in the writer"},
     ]
     assert PRReviewer._is_finding_tracked(_make_finding(), issues) is False
 
@@ -1453,8 +1453,8 @@ def test_is_finding_tracked_short_title() -> None:
     """Title with fewer than 2 extractable keywords is never considered tracked."""
     finding = _make_finding(title="Bug")
     issues = [
-        {"title": "Bug in maestro/review.py",
-         "body": "maestro/review.py has a bug"},
+        {"title": "Bug in app/review.py",
+         "body": "app/review.py has a bug"},
     ]
     assert PRReviewer._is_finding_tracked(finding, issues) is False
 
@@ -1468,8 +1468,8 @@ def test_is_finding_tracked_empty_file_path_not_matched() -> None:
     """
     finding = _make_finding(file="", title="Unused import detected")
     issues = [
-        {"title": "Unused import in maestro/review.py",
-         "body": "unused import detected in maestro/review.py"},
+        {"title": "Unused import in app/review.py",
+         "body": "unused import detected in app/review.py"},
     ]
     assert PRReviewer._is_finding_tracked(finding, issues) is False
 
@@ -1513,31 +1513,31 @@ def test_filter_tracked_findings_removes_matched_bug() -> None:
     """Bug findings tracked by an open issue are filtered out."""
     host = MagicMock()
     host.list_issues.return_value = [
-        {"title": "Unused import in maestro/review.py",
-         "body": "unused import detected in maestro/review.py"},
+        {"title": "Unused import in app/review.py",
+         "body": "unused import detected in app/review.py"},
     ]
     reviewer = _reviewer(host)
 
     bug_finding = ReviewFinding(
-        file="maestro/review.py", line=10, severity="bug",
+        file="app/review.py", line=10, severity="bug",
         title="Unused import detected", description="desc", fix_plan="fix",
     )
     findings = [
         bug_finding,
-        _make_finding(file="maestro/agent.py", title="Missing null check"),
+        _make_finding(file="app/agent.py", title="Missing null check"),
     ]
     result = reviewer._filter_tracked_findings(findings)
 
     assert len(result) == 1
-    assert result[0].file == "maestro/agent.py"
+    assert result[0].file == "app/agent.py"
 
 
 def test_filter_tracked_findings_all_severities_filtered() -> None:
     """Findings of any severity tracked by an open issue are filtered out."""
     host = MagicMock()
     host.list_issues.return_value = [
-        {"title": "Unused import in maestro/review.py",
-         "body": "unused import detected in maestro/review.py"},
+        {"title": "Unused import in app/review.py",
+         "body": "unused import detected in app/review.py"},
     ]
     reviewer = _reviewer(host)
 
@@ -1551,13 +1551,13 @@ def test_filter_tracked_findings_all_severities_filtered() -> None:
 def test_filter_tracked_findings_all_bugs_tracked() -> None:
     host = MagicMock()
     host.list_issues.return_value = [
-        {"title": "Unused import in maestro/review.py",
-         "body": "unused import detected in maestro/review.py"},
+        {"title": "Unused import in app/review.py",
+         "body": "unused import detected in app/review.py"},
     ]
     reviewer = _reviewer(host)
 
     bug = ReviewFinding(
-        file="maestro/review.py", line=10, severity="bug",
+        file="app/review.py", line=10, severity="bug",
         title="Unused import detected", description="desc", fix_plan="fix",
     )
     result = reviewer._filter_tracked_findings([bug])
@@ -1609,7 +1609,7 @@ def test_filter_tracked_findings_no_issues() -> None:
 
 def _make_thread(
     *,
-    path: str = "maestro/review.py",
+    path: str = "app/review.py",
     body: str = "\U0001f41b **Unused import detected**\n\nos is unused",
     is_resolved: bool = False,
     thread_id: str = "PRRT_1",
@@ -1660,7 +1660,7 @@ def test_is_finding_tracked_null_issue_body() -> None:
     """GitHub API can return body: null — must not crash on string concatenation."""
     finding = _make_finding()
     issues = [
-        {"title": "unused import in maestro/review.py", "body": None},
+        {"title": "unused import in app/review.py", "body": None},
     ]
     # Should not raise TypeError
     PRReviewer._is_finding_tracked(finding, issues)
@@ -1681,7 +1681,7 @@ def test_match_finding_to_thread_match() -> None:
 
 
 def test_match_finding_to_thread_no_match() -> None:
-    thread = _make_thread(path="maestro/agent.py")
+    thread = _make_thread(path="app/agent.py")
     finding = _make_finding()
     assert PRReviewer._match_finding_to_thread(finding, [thread]) is None
 
@@ -1743,10 +1743,10 @@ def test_match_finding_to_thread_fuzzy_partial_overlap_below_threshold() -> None
 def test_match_finding_to_thread_fuzzy_requires_path_match() -> None:
     """Fuzzy match never crosses file paths."""
     thread = _make_thread(
-        path="maestro/agent.py",
+        path="app/agent.py",
         body="\U0001f41b **Unused import detected**",
     )
-    finding = _make_finding(file="maestro/review.py", title="Unused import")
+    finding = _make_finding(file="app/review.py", title="Unused import")
     assert PRReviewer._match_finding_to_thread(finding, [thread]) is None
 
 
@@ -1842,7 +1842,7 @@ def _graphql_thread_node(
     is_resolved: bool = False,
     is_outdated: bool = False,
     comment_id: int = 100,
-    path: str = "maestro/review.py",
+    path: str = "app/review.py",
     body: str = "\U0001f41b **Unused import detected**\n\nos is unused",
     extra_comments: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
@@ -1899,7 +1899,7 @@ def test_categorize_reopen_resolved() -> None:
     reviewer = _reviewer(host)
 
     bug = ReviewFinding(
-        file="maestro/review.py", line=10, severity="bug",
+        file="app/review.py", line=10, severity="bug",
         title="Unused import detected", description="desc", fix_plan="fix",
     )
     new, skip, reopen = reviewer._categorize_by_thread_state(10, [bug])
@@ -1916,7 +1916,7 @@ def test_categorize_skip_resolved_with_issue_link() -> None:
         _graphql_thread_node(
             is_resolved=True,
             extra_comments=[
-                {"databaseId": 101, "path": "maestro/review.py",
+                {"databaseId": 101, "path": "app/review.py",
                  "body": "Created https://github.com/owner/repo/issues/42"},
             ],
         ),
@@ -1938,29 +1938,29 @@ def test_categorize_mixed() -> None:
         _graphql_thread_node(thread_id="PRRT_1", is_resolved=False),
         _graphql_thread_node(
             thread_id="PRRT_2", is_resolved=True,
-            path="maestro/agent.py", comment_id=200,
+            path="app/agent.py", comment_id=200,
             body="\U0001f41b **Missing null check**\nx may be None",
         ),
     ]
     reviewer = _reviewer(host)
 
     bug_finding = ReviewFinding(
-        file="maestro/agent.py", line=10, severity="bug",
+        file="app/agent.py", line=10, severity="bug",
         title="Missing null check", description="desc", fix_plan="fix",
     )
     findings = [
         _make_finding(),  # matches PRRT_1 (unresolved) → skip
         bug_finding,  # matches PRRT_2 (resolved, bug) → reopen
-        _make_finding(file="maestro/cli.py", title="Broken argument parsing"),  # no match → new
+        _make_finding(file="app/cli.py", title="Broken argument parsing"),  # no match → new
     ]
     new, skip, reopen = reviewer._categorize_by_thread_state(10, findings)
 
     assert len(new) == 1
-    assert new[0].file == "maestro/cli.py"
+    assert new[0].file == "app/cli.py"
     assert len(skip) == 1
-    assert skip[0].file == "maestro/review.py"
+    assert skip[0].file == "app/review.py"
     assert len(reopen) == 1
-    assert reopen[0][0].file == "maestro/agent.py"
+    assert reopen[0][0].file == "app/agent.py"
 
 
 def test_categorize_api_failure() -> None:
@@ -1993,7 +1993,7 @@ def test_post_review_replies_on_resolved_thread() -> None:
     ]
     reviewer = _reviewer(host)
     bug = ReviewFinding(
-        file="maestro/review.py", line=10, severity="bug",
+        file="app/review.py", line=10, severity="bug",
         title="Unused import detected", description="desc", fix_plan="fix",
     )
 
@@ -2042,7 +2042,7 @@ def test_post_review_skips_resolved_with_issue() -> None:
         _graphql_thread_node(
             is_resolved=True,
             extra_comments=[
-                {"databaseId": 101, "path": "maestro/review.py",
+                {"databaseId": 101, "path": "app/review.py",
                  "body": "Tracked in #42"},
             ],
         ),
@@ -2067,7 +2067,7 @@ def test_post_review_mixed_new_and_reopen() -> None:
     host.get_pr_review_threads.return_value = [
         _graphql_thread_node(
             thread_id="PRRT_1", is_resolved=True,
-            path="maestro/agent.py", comment_id=200,
+            path="app/agent.py", comment_id=200,
             body="\U0001f41b **Missing null check**\nx may be None",
         ),
     ]
@@ -2075,7 +2075,7 @@ def test_post_review_mixed_new_and_reopen() -> None:
 
     new_finding = _make_finding()
     reopen_finding = ReviewFinding(
-        file="maestro/agent.py", line=10, severity="bug",
+        file="app/agent.py", line=10, severity="bug",
         title="Missing null check", description="desc", fix_plan="fix",
     )
     findings = [new_finding, reopen_finding]

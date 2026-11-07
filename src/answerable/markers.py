@@ -4,7 +4,7 @@ These are the terminal reply phrases a comment-remediation tool posts on
 AI review threads to record its verdict on a finding.  ``review.py``
 imports from here so the reviewer's detection cannot drift from the
 posted wording.  The phrases are a wire contract: downstream consumers
-(for example the Maestro agent, thomas-sodon/maestro-agent) match them
+(for example a comment-remediation agent) match them
 verbatim, so changing one is a breaking change.  This module
 deliberately imports nothing from the package so it cannot be drawn
 into an import cycle.

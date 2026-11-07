@@ -22,7 +22,6 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/thomas-sodon/answerable"
 Issues = "https://github.com/thomas-sodon/answerable/issues"
-"Parent project" = "https://github.com/thomas-sodon/maestro-agent"
 
 [project.optional-dependencies]
 dev = [

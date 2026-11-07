@@ -55,7 +55,7 @@ Invalid or missing arguments exit `2` (standard `argparse` behaviour).
 A finding counts as **answered** when:
 
 - *inline*: its thread is resolved, outdated, or has any reply;
-- *overflow*: a PR comment containing the `<!-- maestro:overflow-ack -->` marker
+- *overflow*: a PR comment containing the `<!-- answerable:overflow-ack -->` marker
   lists its `of-<hash>` handle on a line together with one of these verdict
   phrases: `Could not prove this defect`, `Could not prove this bug`,
   `Fixed automatically`, `Fixed locally with implementation-plan context.`,
@@ -72,8 +72,7 @@ and/or environment variables.
 `[review]` section is used:
 
 1. the path in `ANSWERABLE_CONFIG`;
-2. `./answerable.toml`;
-3. `./maestro.toml` (compatible with a Maestro project config).
+2. `./answerable.toml`.
 
 ```toml
 [review]

@@ -34,7 +34,7 @@ diff --git a/b.py b/b.py
 
 
 def _make_finding(
-    file: str = "maestro/review.py",
+    file: str = "app/review.py",
     title: str = "Unused import detected",
     severity: str = "suggestion",
 ) -> ReviewFinding:
@@ -50,7 +50,7 @@ def _graphql_thread_node(
     is_resolved: bool = False,
     is_outdated: bool = False,
     comment_id: int = 100,
-    path: str = "maestro/review.py",
+    path: str = "app/review.py",
     body: str = "\U0001f4a1 **Unused import detected**\n\nos is unused",
     reply_bodies: list[str] | None = None,
 ) -> dict[str, object]:
@@ -89,7 +89,7 @@ class TestFindMatchingIssue:
         finding = _make_finding()
         issues = [
             {"number": 42, "title": "review.py: unused import and dead code",
-             "body": "maestro/review.py has unused imports"},
+             "body": "app/review.py has unused imports"},
         ]
         result = PRReviewer._find_matching_issue(finding, issues)
         assert result is not None
@@ -108,8 +108,8 @@ class TestFindMatchingIssue:
     def test_returns_first_match(self) -> None:
         finding = _make_finding()
         issues = [
-            {"number": 1, "title": "review.py unused import", "body": "maestro/review.py detected"},
-            {"number": 2, "title": "review.py unused import again", "body": "maestro/review.py found"},
+            {"number": 1, "title": "review.py unused import", "body": "app/review.py detected"},
+            {"number": 2, "title": "review.py unused import again", "body": "app/review.py found"},
         ]
         result = PRReviewer._find_matching_issue(finding, issues)
         assert result is not None
@@ -128,7 +128,7 @@ class TestFilterTrackedFindingsAllSeverities:
         host = MagicMock()
         host.list_issues.return_value = [
             {"number": 42, "title": "review.py: unused import",
-             "body": "maestro/review.py unused imports detected"},
+             "body": "app/review.py unused imports detected"},
         ]
         reviewer = _reviewer(host)
         finding = _make_finding(severity="suggestion")
@@ -141,7 +141,7 @@ class TestFilterTrackedFindingsAllSeverities:
         host = MagicMock()
         host.list_issues.return_value = [
             {"number": 42, "title": "review.py: unused import",
-             "body": "maestro/review.py unused imports detected"},
+             "body": "app/review.py unused imports detected"},
         ]
         reviewer = _reviewer(host)
         finding = _make_finding(severity="nit")
@@ -300,7 +300,7 @@ class TestHandleDisagreements:
         host.reply_to_review_comment.side_effect = GitHubError("network blip")
         reviewer = _reviewer(host)
         thread = ReviewThread(
-            thread_id="PRRT_1", comment_id=100, path="maestro/review.py",
+            thread_id="PRRT_1", comment_id=100, path="app/review.py",
             body="\U0001f4a1 **Unused import detected**\nos is unused",
             all_bodies="\U0001f4a1 **Unused import detected**\nos is unused\n"
                        "Could not prove this defect.",
@@ -327,7 +327,7 @@ class TestHandleDisagreements:
         ]
         host.list_issues.return_value = [
             {"number": 42, "title": "review.py: unused import",
-             "body": "maestro/review.py has unused imports detected"},
+             "body": "app/review.py has unused imports detected"},
         ]
         reviewer = _reviewer(host)
         finding = _make_finding(severity="suggestion")
@@ -491,7 +491,7 @@ class TestHandleDisagreements:
         host.create_issue.return_value = 12
         reviewer = _reviewer(host)
         finding = ReviewFinding(
-            file="maestro/review.py", line=10, severity="suggestion",
+            file="app/review.py", line=10, severity="suggestion",
             title="Unused import detected",
             description="desc", fix_plan="",
             suggested_code="import sys",
@@ -539,9 +539,9 @@ class TestHandleDisagreements:
             "id": "PRRT_1",
             "isResolved": False,
             "comments": {"nodes": [
-                {"databaseId": 100, "path": "maestro/review.py",
+                {"databaseId": 100, "path": "app/review.py",
                  "body": root_body},
-                {"databaseId": 101, "path": "maestro/review.py",
+                {"databaseId": 101, "path": "app/review.py",
                  "body": "Could not prove this defect with a failing test."},
             ]},
         }
@@ -574,7 +574,7 @@ class TestHandleDisagreements:
         # Matching issue present but the 'number' key is absent.
         host.list_issues.return_value = [
             {"title": "review.py unused import detected",
-             "body": "maestro/review.py unused imports detected"},
+             "body": "app/review.py unused imports detected"},
         ]
         host.create_issue.return_value = 55
         reviewer = _reviewer(host)
@@ -672,13 +672,13 @@ class TestCategorizeNitsNotReopened:
             "id": "PRRT_1",
             "isResolved": True,
             "comments": {"nodes": [
-                {"databaseId": 100, "path": "maestro/review.py",
+                {"databaseId": 100, "path": "app/review.py",
                  "body": "\U0001f41b **Unused import detected**\n\nos is unused"},
             ]},
         }]
         reviewer = _reviewer(host)
         bug = ReviewFinding(
-            file="maestro/review.py", line=10, severity="bug",
+            file="app/review.py", line=10, severity="bug",
             title="Unused import detected", description="desc", fix_plan="fix",
         )
 

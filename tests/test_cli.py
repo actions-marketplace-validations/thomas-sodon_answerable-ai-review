@@ -450,7 +450,7 @@ class TestTomlConfigParsingException:
     """Cover the TOML parse-error branch."""
 
     def test_malformed_toml_returns_empty(self, tmp_path: Path) -> None:
-        toml_file = tmp_path / "cwd" / "maestro.toml"
+        toml_file = tmp_path / "cwd" / "answerable.toml"
         toml_file.parent.mkdir()
         toml_file.write_text("{{{invalid toml content")
 
@@ -463,7 +463,7 @@ class TestTomlConfigParsingException:
 
 
 class TestTomlConfigIntegration:
-    """Verify answerable.cli loads defaults from maestro.toml."""
+    """Verify answerable.cli loads defaults from answerable.toml."""
 
     def test_defaults_are_sensible(self) -> None:
         """CLI module-level defaults must have expected values."""
@@ -516,19 +516,23 @@ class TestTomlConfigIntegration:
 class TestLoadReviewDefaults:
     """Verify _load_review_defaults handles edge cases correctly."""
 
-    def test_empty_review_section_skipped(self, tmp_path: Path) -> None:
+    def test_empty_review_section_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """A config file without a [review] section should not stop the search.
 
-        The first candidate (answerable.toml) has no [review]; the second
-        (maestro.toml) has it.  The function should skip the first and return
-        values from the second.
+        The first candidate (ANSWERABLE_CONFIG) has no [review]; the second
+        (answerable.toml) has it.  The function should skip the first and
+        return values from the second.
         """
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        # First candidate: answerable.toml exists but [review] is absent
-        (cwd / "answerable.toml").write_text("[timeouts]\ngit = 30\n")
-        # Second candidate: maestro.toml with [review] section
-        (cwd / "maestro.toml").write_text(
+        # First candidate: the explicit config exists but [review] is absent
+        explicit = tmp_path / "explicit.toml"
+        explicit.write_text("[timeouts]\ngit = 30\n")
+        monkeypatch.setenv("ANSWERABLE_CONFIG", str(explicit))
+        # Second candidate: answerable.toml with [review] section
+        (cwd / "answerable.toml").write_text(
             "[review]\nmax_diff_chars = 50000\nmax_files = 25\ngh_timeout = 15\n"
         )
 
@@ -542,7 +546,7 @@ class TestLoadReviewDefaults:
         assert result["gh_timeout"] == 15
 
     def test_no_toml_returns_empty(self, tmp_path: Path) -> None:
-        """When no maestro.toml exists, return empty dict."""
+        """When no answerable.toml exists, return empty dict."""
         from answerable.cli import _load_review_defaults
 
         with patch("answerable.cli.Path.cwd", return_value=tmp_path / "also_nonexistent"):
@@ -551,10 +555,10 @@ class TestLoadReviewDefaults:
         assert result == {}
 
     def test_review_section_with_values(self, tmp_path: Path) -> None:
-        """When maestro.toml has a populated [review] section, values are returned."""
+        """When answerable.toml has a populated [review] section, values are returned."""
         from answerable.cli import _load_review_defaults
 
-        toml_file = tmp_path / "cwd" / "maestro.toml"
+        toml_file = tmp_path / "cwd" / "answerable.toml"
         toml_file.parent.mkdir()
         toml_file.write_text(
             "[review]\nmax_diff_chars = 100000\nmax_files = 75\ngh_timeout = 45\n"

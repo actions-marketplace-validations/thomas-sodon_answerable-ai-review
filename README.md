@@ -13,10 +13,6 @@ disputes or tracks each one.
 
 <!-- demo screenshot goes here -->
 
-It was extracted from [Maestro](https://github.com/thomas-sodon/maestro-agent),
-an autonomous engineering agent, where it reviews every pull request the agent
-opens. It has no dependency on Maestro and works on any GitHub repository.
-
 ## Quickstart (GitHub Action, 2 minutes)
 
 1. Add an `ANTHROPIC_API_KEY` (or a `CLAUDE_CODE_OAUTH_TOKEN`) as a repository

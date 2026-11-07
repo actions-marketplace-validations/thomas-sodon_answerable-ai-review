@@ -1,4 +1,4 @@
-"""Tests for maestro_review.github — GitHubClient with subprocess mocked."""
+"""Tests for answerable.github — GitHubClient with subprocess mocked."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from maestro_review.github import GitHubClient, GitHubError
+from answerable.github import GitHubClient, GitHubError
 
 
 class TestListIssuesUsesRun:
@@ -83,7 +83,7 @@ class TestListIssuesUsesRun:
 
         with (
             patch.object(client, "_run", return_value=mock_result),
-            patch("maestro_review.github.subprocess.run") as mock_subprocess,
+            patch("answerable.github.subprocess.run") as mock_subprocess,
         ):
             client.list_issues()
 

@@ -1,4 +1,4 @@
-"""Tests for maestro_review.sdk — query(), retry, and rate limit handling."""
+"""Tests for answerable.sdk — query(), retry, and rate limit handling."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from claude_agent_sdk.types import (
     ResultMessage,
 )
 
-from maestro_review.sdk import QueryOptions, _extract_error_detail, _is_transient, query
+from answerable.sdk import QueryOptions, _extract_error_detail, _is_transient, query
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,8 +61,8 @@ class TestRateLimitHandling:
             yield _result_msg()
 
         with (
-            caplog.at_level(logging.WARNING, logger="maestro_review"),
-            patch("maestro_review.sdk._query", side_effect=gen),
+            caplog.at_level(logging.WARNING, logger="answerable"),
+            patch("answerable.sdk._query", side_effect=gen),
         ):
             result = await query(prompt="test")
 
@@ -82,8 +82,8 @@ class TestRateLimitHandling:
             yield _result_msg()
 
         with (
-            caplog.at_level(logging.WARNING, logger="maestro_review"),
-            patch("maestro_review.sdk._query", side_effect=gen),
+            caplog.at_level(logging.WARNING, logger="answerable"),
+            patch("answerable.sdk._query", side_effect=gen),
         ):
             result = await query(prompt="test")
 
@@ -108,8 +108,8 @@ class TestRateLimitHandling:
             yield _result_msg()
 
         with (
-            caplog.at_level(logging.WARNING, logger="maestro_review"),
-            patch("maestro_review.sdk._query", side_effect=gen),
+            caplog.at_level(logging.WARNING, logger="answerable"),
+            patch("answerable.sdk._query", side_effect=gen),
         ):
             result = await query(prompt="test")
 
@@ -128,7 +128,7 @@ class TestStructuredOutput:
         async def gen(**kwargs: Any) -> Any:
             yield _result_msg("", structured_output=data)
 
-        with patch("maestro_review.sdk._query", side_effect=gen):
+        with patch("answerable.sdk._query", side_effect=gen):
             result = await query(prompt="test")
 
         assert result.structured_output == data
@@ -150,7 +150,7 @@ class TestResultUsageGuard:
         async def gen(**kwargs: Any) -> Any:
             yield _result_msg("", usage=5)
 
-        with patch("maestro_review.sdk._query", side_effect=gen):
+        with patch("answerable.sdk._query", side_effect=gen):
             result = await query(prompt="test")
 
         assert result.usage.total_tokens == 0
@@ -281,7 +281,7 @@ class TestQueryRetry:
                 raise RuntimeError("Command failed with exit code 1")
             yield _result_msg("success")
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result = await query(prompt="test")
 
@@ -296,7 +296,7 @@ class TestQueryRetry:
             raise RuntimeError("Command failed with exit code 1")
             yield  # make it an async generator  # pragma: no cover
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
              pytest.raises(RuntimeError, match="exit code 1"):
             await query(prompt="test")
@@ -314,7 +314,7 @@ class TestQueryRetry:
             raise ValueError("bad input")
             yield  # pragma: no cover
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
              pytest.raises(ValueError, match="bad input"):
             await query(prompt="test")
@@ -328,7 +328,7 @@ class TestQueryRetry:
             raise RuntimeError("authentication failed exit code 1")
             yield  # pragma: no cover
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
              pytest.raises(RuntimeError, match="authentication"):
             await query(prompt="test")
@@ -347,7 +347,7 @@ class TestQueryRetry:
                 raise ConnectionError("connection reset")
             yield _result_msg("recovered")
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock):
             result = await query(prompt="test")
 
@@ -366,7 +366,7 @@ class TestQueryRetry:
                 raise RuntimeError("Command failed with exit code 1")
             yield _result_msg("finally")
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result = await query(prompt="test")
 
@@ -397,7 +397,7 @@ class TestQueryRetry:
                     "Cancelled via cancel scope abc; reason: deadline exceeded"
                 )
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", AsyncMock(side_effect=flaky_sleep)):
             result = await query(prompt="test")
 
@@ -423,7 +423,7 @@ class TestStderrCapture:
             raise ValueError("non-transient crash")
             yield  # pragma: no cover
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock), \
              pytest.raises(ValueError, match="non-transient crash") as exc_info:
             await query(prompt="test")
@@ -446,7 +446,7 @@ class TestStderrCapture:
                 raise RuntimeError("Command failed with exit code 1")
             yield _result_msg("ok")
 
-        with patch("maestro_review.sdk._query", side_effect=gen), \
+        with patch("answerable.sdk._query", side_effect=gen), \
              patch("asyncio.sleep", new_callable=AsyncMock):
             result = await query(prompt="test")
 
@@ -475,7 +475,7 @@ class TestQueryOptionsConstruction:
             captured["options"] = kwargs.get("options")
             yield _result_msg("ok")
 
-        with patch("maestro_review.sdk._query", side_effect=gen):
+        with patch("answerable.sdk._query", side_effect=gen):
             result = await query(prompt="test")
 
         assert result.response == "ok"
@@ -492,7 +492,7 @@ class TestQueryOptionsConstruction:
             captured["options"] = kwargs.get("options")
             yield _result_msg("ok")
 
-        with patch("maestro_review.sdk._query", side_effect=gen):
+        with patch("answerable.sdk._query", side_effect=gen):
             await query(
                 prompt="t",
                 options=QueryOptions(model="claude-opus-5-5", effort="high"),
@@ -517,10 +517,10 @@ class TestStderrDrainPatchGuard:
             SubprocessCLITransport,
         )
 
-        from maestro_review.sdk import _patch_sdk_stderr_drain
+        from answerable.sdk import _patch_sdk_stderr_drain
 
         monkeypatch.delattr(SubprocessCLITransport, "_read_messages_impl")
-        with caplog.at_level(logging.DEBUG, logger="maestro_review"):
+        with caplog.at_level(logging.DEBUG, logger="answerable"):
             _patch_sdk_stderr_drain()
 
         assert not hasattr(SubprocessCLITransport, "_read_messages_impl")
@@ -537,13 +537,13 @@ class TestStderrDrainPatchGuard:
             SubprocessCLITransport,
         )
 
-        import maestro_review.sdk as sdk_mod
+        import answerable.sdk as sdk_mod
 
         monkeypatch.delattr(SubprocessCLITransport, "_read_messages_impl")
         # Load a fresh copy under a private name so the real module is untouched;
         # dataclasses need the module registered while its body executes.
         spec = importlib.util.spec_from_file_location(
-            "_maestro_review_sdk_probe", sdk_mod.__file__,
+            "_answerable_sdk_probe", sdk_mod.__file__,
         )
         assert spec is not None
         assert spec.loader is not None
@@ -564,13 +564,13 @@ class TestStderrDrainPatchGuard:
             SubprocessCLITransport,
         )
 
-        from maestro_review.sdk import _patch_sdk_stderr_drain
+        from answerable.sdk import _patch_sdk_stderr_drain
 
         before = SubprocessCLITransport._read_messages_impl
         target = "claude_agent_sdk._internal.transport.subprocess_cli"
         with (
             patch.dict(sys.modules, {target: None}),
-            caplog.at_level(logging.DEBUG, logger="maestro_review"),
+            caplog.at_level(logging.DEBUG, logger="answerable"),
         ):
             _patch_sdk_stderr_drain()
 

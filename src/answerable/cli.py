@@ -2,8 +2,8 @@
 """CLI entry point for AI code review of pull requests.
 
 Usage:
-    maestro-review --repo owner/repo --pr 42 [--dry-run]
-    maestro-review --repo owner/repo --pr 42 --require-comment-replies
+    answerable --repo owner/repo --pr 42 [--dry-run]
+    answerable --repo owner/repo --pr 42 --require-comment-replies
 
 Exits 1 whenever the reviewer produces a comment — i.e. a finding of any
 severity (bug, suggestion, or nit) is newly posted, or a bug is flagged as
@@ -32,11 +32,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-from maestro_review.review import PRReviewer, _extract_thread_title
+from answerable.review import PRReviewer, _extract_thread_title
 
 # ---------------------------------------------------------------------------
 # Config defaults — optionally loaded from a TOML [review] section and/or
-# MAESTRO_REVIEW_* environment variables. CLI arguments always win.
+# ANSWERABLE_* environment variables. CLI arguments always win.
 # ---------------------------------------------------------------------------
 
 _DEFAULT_MAX_DIFF_CHARS = 80_000
@@ -54,9 +54,9 @@ _CONFIG_KEYS: dict[str, int] = {
 }
 
 # Environment variable naming an explicit config file (searched first).
-CONFIG_ENV_VAR = "MAESTRO_REVIEW_CONFIG"
-# Per-key environment overrides: MAESTRO_REVIEW_MAX_DIFF_CHARS, etc.
-_ENV_PREFIX = "MAESTRO_REVIEW_"
+CONFIG_ENV_VAR = "ANSWERABLE_CONFIG"
+# Per-key environment overrides: ANSWERABLE_MAX_DIFF_CHARS, etc.
+_ENV_PREFIX = "ANSWERABLE_"
 
 
 def _config_candidates() -> list[Path]:
@@ -66,7 +66,7 @@ def _config_candidates() -> list[Path]:
     if explicit:
         candidates.append(Path(explicit))
     candidates.extend((
-        Path.cwd() / "maestro-review.toml",
+        Path.cwd() / "answerable.toml",
         Path.cwd() / "maestro.toml",
     ))
     return candidates
@@ -91,7 +91,7 @@ def _load_toml_defaults() -> dict[str, int]:
 
 
 def _load_env_overrides() -> dict[str, int]:
-    """Read MAESTRO_REVIEW_<KEY> integer overrides from the environment."""
+    """Read ANSWERABLE_<KEY> integer overrides from the environment."""
     result: dict[str, int] = {}
     for key in _CONFIG_KEYS:
         raw = os.environ.get(_ENV_PREFIX + key.upper())
@@ -146,7 +146,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    log = logging.getLogger("maestro_review.cli")
+    log = logging.getLogger("answerable.cli")
 
     reviewer = PRReviewer(
         github_repo=args.repo,

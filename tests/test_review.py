@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from maestro_review.github import GitHubError
-from maestro_review.markers import _FIXED_LOCALLY_MARKER
-from maestro_review.review import (
+from answerable.github import GitHubError
+from answerable.markers import _FIXED_LOCALLY_MARKER
+from answerable.review import (
     _AI_FINDING_RE,
     _OVERFLOW_ACK_SENTINEL,
     _OVERFLOW_LEGACY_HEADER,
@@ -30,7 +30,7 @@ from maestro_review.review import (
     _parse_overflow_ack,
     _parse_overflow_findings,
 )
-from maestro_review.sdk import QueryResult, QueryUsage
+from answerable.sdk import QueryResult, QueryUsage
 
 # ------------------------------------------------------------------
 # Helpers
@@ -363,7 +363,7 @@ async def test_review_success() -> None:
         ],
     }
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result(response_data)
         result = await reviewer.review(42)
 
@@ -399,7 +399,7 @@ async def test_review_json_parse_fallback() -> None:
         usage=QueryUsage(total_tokens=500, total_cost_usd=0.02),
     )
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = raw_result
         result = await reviewer.review(42)
 
@@ -428,7 +428,7 @@ async def test_review_malformed_line_values() -> None:
         ],
     }
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result(response_data)
         result = await reviewer.review(42)
 
@@ -466,7 +466,7 @@ async def test_review_null_string_fields_coerced_to_empty() -> None:
         ],
     }
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result(response_data)
         result = await reviewer.review(42)
 
@@ -500,7 +500,7 @@ async def test_review_drops_finding_without_a_file_path() -> None:
         ],
     }
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result(response_data)
         result = await reviewer.review(42)
 
@@ -522,7 +522,7 @@ async def test_review_data_is_bare_list() -> None:
         ]),
         usage=QueryUsage(total_tokens=10, total_cost_usd=0.0),
     )
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = bare_list_response
         result = await reviewer.review(42)
 
@@ -548,7 +548,7 @@ async def test_review_skips_non_dict_finding_items_and_normalises_values() -> No
         ],
     }
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result(response_data)
         result = await reviewer.review(42)
 
@@ -566,7 +566,7 @@ async def test_review_uses_read_only_tools() -> None:
     host.get_pr_info.return_value = {"title": "T", "body": ""}
     reviewer = _reviewer(host)
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result({"summary": "ok", "findings": []})
         await reviewer.review(42)
 
@@ -585,7 +585,7 @@ async def test_review_uses_opus_5_5_at_high_effort() -> None:
     host.get_pr_info.return_value = {"title": "T", "body": ""}
     reviewer = _reviewer(host)
 
-    with patch("maestro_review.review.query", new_callable=AsyncMock) as mock_query:
+    with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _sdk_result({"summary": "ok", "findings": []})
         await reviewer.review(42)
 
@@ -713,7 +713,7 @@ def test_build_review_payload_disclaimer() -> None:
     reviewer = _reviewer()
     payload = reviewer._build_review_payload([], {}, "All good")
     assert payload["body"].endswith(
-        "*AI-generated review by maestro-review — new findings fail this check*",
+        "*AI-generated review by Answerable — new findings fail this check*",
     )
     assert "advisory only" not in payload["body"].lower()
 

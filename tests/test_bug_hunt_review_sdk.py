@@ -1,4 +1,4 @@
-"""TDD bug hunt tests for maestro_review/sdk.py edge cases."""
+"""TDD bug hunt tests for answerable/sdk.py edge cases."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from maestro_review.sdk import QueryResult, _truncate
+from answerable.sdk import QueryResult, _truncate
 
 
 class TestTruncateEdgeCases:
@@ -67,10 +67,10 @@ class TestCostDisplayZero:
             yield mock_result_msg
 
         with (
-            patch("maestro_review.sdk._query", side_effect=mock_query_gen),
-            caplog.at_level(logging.INFO, logger="maestro_review"),
+            patch("answerable.sdk._query", side_effect=mock_query_gen),
+            caplog.at_level(logging.INFO, logger="answerable"),
         ):
-            from maestro_review.sdk import query
+            from answerable.sdk import query
             await query("test prompt")
 
         # Check the log message contains $0.0000, not N/A

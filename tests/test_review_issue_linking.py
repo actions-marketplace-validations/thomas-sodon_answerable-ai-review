@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from maestro_review.github import GitHubError
-from maestro_review.review import PRReviewer, ReviewFinding, ReviewThread
+from answerable.github import GitHubError
+from answerable.review import PRReviewer, ReviewFinding, ReviewThread
 
 # ------------------------------------------------------------------
 # Helpers
@@ -232,7 +232,7 @@ class TestHandleDisagreements:
         title, issue_body = host.create_issue.call_args[0]
         assert "Unused import" in title
         assert issue_body.endswith(
-            "*Escalated by maestro-review: a reply on the review thread "
+            "*Escalated by Answerable: a reply on the review thread "
             "disputed this finding, and a later review raised it again.*",
         )
         assert "suggestion" in host.create_issue.call_args[1]["labels"]
@@ -284,7 +284,7 @@ class TestHandleDisagreements:
         reviewer = _reviewer(host)
         finding = _make_finding(severity="suggestion")
 
-        with caplog.at_level(logging.WARNING, logger="maestro_review"):
+        with caplog.at_level(logging.WARNING, logger="answerable"):
             reviewer._handle_disagreements(10, [finding])
 
         assert "issue created but thread not linked" in caplog.text

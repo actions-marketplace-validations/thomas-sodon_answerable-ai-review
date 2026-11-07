@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from maestro_review.github import GitHubClient, GitHubError
+from answerable.github import GitHubClient, GitHubError
 
 
 class TestCreateIssue:

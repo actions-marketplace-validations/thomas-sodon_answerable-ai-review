@@ -1,4 +1,4 @@
-"""Tests for maestro_review.cli — all external calls are mocked."""
+"""Tests for answerable.cli — all external calls are mocked."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from maestro_review import cli as review_pr_mod
-from maestro_review.review import (
+from answerable import cli as review_pr_mod
+from answerable.review import (
     OverflowFinding,
     PostReviewResult,
     ReviewThread,
@@ -44,7 +44,7 @@ class FakeFinding:
 BUG_FINDING = FakeFinding(severity="bug")
 SUGGESTION_FINDING = FakeFinding(severity="suggestion")
 
-BASE_ARGV = ["maestro-review", "--repo", "owner/repo", "--pr", "1"]
+BASE_ARGV = ["answerable", "--repo", "owner/repo", "--pr", "1"]
 
 
 # ---------------------------------------------------------------------------
@@ -61,8 +61,8 @@ class TestPostFailureExitsOne:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.side_effect = RuntimeError("API down")
@@ -78,8 +78,8 @@ class TestPostFailureExitsOne:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.side_effect = RuntimeError("API down")
@@ -96,8 +96,8 @@ class TestReviewExceptionExitsOne:
     def test_review_exception_exits_one(self) -> None:
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer"),
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer"),
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.side_effect = RuntimeError("SDK crash")
 
@@ -130,8 +130,8 @@ class TestNormalFlow:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -150,8 +150,8 @@ class TestNormalFlow:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -169,8 +169,8 @@ class TestNormalFlow:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result()
@@ -182,8 +182,8 @@ class TestNormalFlow:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -209,8 +209,8 @@ class TestAnyPostedFindingBlocks:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -229,8 +229,8 @@ class TestAnyPostedFindingBlocks:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             reviewer = mock_cls.return_value
@@ -252,8 +252,8 @@ class TestAnyPostedFindingBlocks:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -272,8 +272,8 @@ class TestAnyPostedFindingBlocks:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -294,8 +294,8 @@ class TestDryRun:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
 
@@ -311,8 +311,8 @@ class TestDryRun:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             reviewer = mock_cls.return_value
@@ -335,8 +335,8 @@ class TestDryRun:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             reviewer = mock_cls.return_value
@@ -363,8 +363,8 @@ class TestDryRun:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             reviewer = mock_cls.return_value
@@ -389,9 +389,9 @@ class TestPostReviewLogBranches:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
-            caplog.at_level(logging.INFO, logger="maestro_review.cli"),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
+            caplog.at_level(logging.INFO, logger="answerable.cli"),
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -412,9 +412,9 @@ class TestPostReviewLogBranches:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
-            caplog.at_level(logging.INFO, logger="maestro_review.cli"),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
+            caplog.at_level(logging.INFO, logger="answerable.cli"),
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result(
@@ -433,8 +433,8 @@ class TestDryRunFilteringFallback:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value._filter_tracked_findings.side_effect = RuntimeError("API fail")
@@ -454,16 +454,16 @@ class TestTomlConfigParsingException:
         toml_file.parent.mkdir()
         toml_file.write_text("{{{invalid toml content")
 
-        from maestro_review.cli import _load_review_defaults
+        from answerable.cli import _load_review_defaults
 
-        with patch("maestro_review.cli.Path.cwd", return_value=tmp_path / "cwd"):
+        with patch("answerable.cli.Path.cwd", return_value=tmp_path / "cwd"):
             result = _load_review_defaults()
 
         assert result == {}
 
 
 class TestTomlConfigIntegration:
-    """Verify maestro_review.cli loads defaults from maestro.toml."""
+    """Verify answerable.cli loads defaults from maestro.toml."""
 
     def test_defaults_are_sensible(self) -> None:
         """CLI module-level defaults must have expected values."""
@@ -477,9 +477,9 @@ class TestTomlConfigIntegration:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli._load_review_defaults", return_value={}),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli._load_review_defaults", return_value={}),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result()
@@ -498,8 +498,8 @@ class TestTomlConfigIntegration:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--gh-timeout", "60"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result()
@@ -519,22 +519,22 @@ class TestLoadReviewDefaults:
     def test_empty_review_section_skipped(self, tmp_path: Path) -> None:
         """A config file without a [review] section should not stop the search.
 
-        The first candidate (maestro-review.toml) has no [review]; the second
+        The first candidate (answerable.toml) has no [review]; the second
         (maestro.toml) has it.  The function should skip the first and return
         values from the second.
         """
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        # First candidate: maestro-review.toml exists but [review] is absent
-        (cwd / "maestro-review.toml").write_text("[timeouts]\ngit = 30\n")
+        # First candidate: answerable.toml exists but [review] is absent
+        (cwd / "answerable.toml").write_text("[timeouts]\ngit = 30\n")
         # Second candidate: maestro.toml with [review] section
         (cwd / "maestro.toml").write_text(
             "[review]\nmax_diff_chars = 50000\nmax_files = 25\ngh_timeout = 15\n"
         )
 
-        from maestro_review.cli import _load_review_defaults
+        from answerable.cli import _load_review_defaults
 
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
 
         assert result["max_diff_chars"] == 50000
@@ -543,16 +543,16 @@ class TestLoadReviewDefaults:
 
     def test_no_toml_returns_empty(self, tmp_path: Path) -> None:
         """When no maestro.toml exists, return empty dict."""
-        from maestro_review.cli import _load_review_defaults
+        from answerable.cli import _load_review_defaults
 
-        with patch("maestro_review.cli.Path.cwd", return_value=tmp_path / "also_nonexistent"):
+        with patch("answerable.cli.Path.cwd", return_value=tmp_path / "also_nonexistent"):
             result = _load_review_defaults()
 
         assert result == {}
 
     def test_review_section_with_values(self, tmp_path: Path) -> None:
         """When maestro.toml has a populated [review] section, values are returned."""
-        from maestro_review.cli import _load_review_defaults
+        from answerable.cli import _load_review_defaults
 
         toml_file = tmp_path / "cwd" / "maestro.toml"
         toml_file.parent.mkdir()
@@ -560,7 +560,7 @@ class TestLoadReviewDefaults:
             "[review]\nmax_diff_chars = 100000\nmax_files = 75\ngh_timeout = 45\n"
         )
 
-        with patch("maestro_review.cli.Path.cwd", return_value=tmp_path / "cwd"):
+        with patch("answerable.cli.Path.cwd", return_value=tmp_path / "cwd"):
             result = _load_review_defaults()
 
         assert result["max_diff_chars"] == 100000
@@ -632,9 +632,9 @@ class TestRequireCommentReplies:
 
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--require-comment-replies"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
-            caplog.at_level(logging.INFO, logger="maestro_review.cli"),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
+            caplog.at_level(logging.INFO, logger="answerable.cli"),
         ):
             reviewer = mock_cls.return_value
             reviewer.find_unreplied_comments.return_value = report
@@ -662,8 +662,8 @@ class TestRequireCommentReplies:
         """
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--require-comment-replies"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             reviewer = mock_cls.return_value
             reviewer.find_unreplied_comments.return_value = UnrepliedComments()
@@ -680,8 +680,8 @@ class TestRequireCommentReplies:
         """An exception from find_unreplied_comments surfaces as exit 1."""
         with (
             patch.object(sys, "argv", [*BASE_ARGV, "--require-comment-replies"]),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             reviewer = mock_cls.return_value
             reviewer.find_unreplied_comments.side_effect = RuntimeError("gh down")
@@ -697,11 +697,11 @@ class TestRequireCommentReplies:
         with (
             patch.object(sys, "argv", BASE_ARGV),
             patch(
-                "maestro_review.cli._load_review_defaults",
+                "answerable.cli._load_review_defaults",
                 return_value={"require_comment_replies": 1},
             ),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             reviewer = mock_cls.return_value
             reviewer.find_unreplied_comments.return_value = UnrepliedComments()
@@ -724,9 +724,9 @@ class TestTomlDefaultsNotFrozenAtImport:
 
         with (
             patch.object(sys, "argv", BASE_ARGV),
-            patch("maestro_review.cli._load_review_defaults", return_value=custom_defaults),
-            patch("maestro_review.cli.PRReviewer") as mock_cls,
-            patch("maestro_review.cli.asyncio") as mock_asyncio,
+            patch("answerable.cli._load_review_defaults", return_value=custom_defaults),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
         ):
             mock_asyncio.run.return_value = result
             mock_cls.return_value.post_review.return_value = _post_result()

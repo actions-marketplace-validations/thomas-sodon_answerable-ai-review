@@ -1,4 +1,4 @@
-"""Bug-hunting tests for maestro_review package.
+"""Bug-hunting tests for answerable package.
 
 Each test targets a suspected bug in the source code. Tests that reveal
 real bugs are kept; tests that pass (no bug) are deleted.
@@ -6,7 +6,7 @@ real bugs are kept; tests that pass (no bug) are deleted.
 
 from __future__ import annotations
 
-from maestro_review.review import PRReviewer, ReviewThread
+from answerable.review import PRReviewer, ReviewThread
 
 
 class TestParseReviewThreadsNullBody:
@@ -77,7 +77,7 @@ class TestMatchFindingToThreadNoneBody:
     """
 
     def test_thread_with_none_body_does_not_crash(self) -> None:
-        from maestro_review.review import ReviewFinding
+        from answerable.review import ReviewFinding
 
         finding = ReviewFinding(
             file="foo.py", line=10, severity="bug",

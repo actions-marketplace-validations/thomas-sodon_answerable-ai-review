@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from maestro_review.cli import _load_review_defaults
+from answerable.cli import _load_review_defaults
 
 
 class TestConfigFiles:
@@ -16,26 +16,26 @@ class TestConfigFiles:
         explicit.write_text("[review]\nmax_files = 7\n")
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        (cwd / "maestro-review.toml").write_text("[review]\nmax_files = 99\n")
-        monkeypatch.setenv("MAESTRO_REVIEW_CONFIG", str(explicit))
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        (cwd / "answerable.toml").write_text("[review]\nmax_files = 99\n")
+        monkeypatch.setenv("ANSWERABLE_CONFIG", str(explicit))
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result["max_files"] == 7
 
-    def test_maestro_review_toml_before_maestro_toml(self, tmp_path: Path) -> None:
+    def test_answerable_toml_before_maestro_toml(self, tmp_path: Path) -> None:
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        (cwd / "maestro-review.toml").write_text("[review]\ngh_timeout = 11\n")
+        (cwd / "answerable.toml").write_text("[review]\ngh_timeout = 11\n")
         (cwd / "maestro.toml").write_text("[review]\ngh_timeout = 22\n")
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result["gh_timeout"] == 11
 
     def test_missing_explicit_config_falls_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MAESTRO_REVIEW_CONFIG", str(tmp_path / "absent.toml"))
+        monkeypatch.setenv("ANSWERABLE_CONFIG", str(tmp_path / "absent.toml"))
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result == {}
 
@@ -44,10 +44,10 @@ class TestEnvOverrides:
     def test_env_overrides_file_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        (cwd / "maestro-review.toml").write_text("[review]\nmax_diff_chars = 1000\nmax_files = 5\n")
-        monkeypatch.setenv("MAESTRO_REVIEW_MAX_DIFF_CHARS", " 2000 ")
-        monkeypatch.setenv("MAESTRO_REVIEW_REQUIRE_COMMENT_REPLIES", "1")
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        (cwd / "answerable.toml").write_text("[review]\nmax_diff_chars = 1000\nmax_files = 5\n")
+        monkeypatch.setenv("ANSWERABLE_MAX_DIFF_CHARS", " 2000 ")
+        monkeypatch.setenv("ANSWERABLE_REQUIRE_COMMENT_REPLIES", "1")
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result["max_diff_chars"] == 2000
         assert result["max_files"] == 5
@@ -56,16 +56,16 @@ class TestEnvOverrides:
     def test_invalid_and_blank_env_values_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        monkeypatch.setenv("MAESTRO_REVIEW_MAX_FILES", "lots")
-        monkeypatch.setenv("MAESTRO_REVIEW_GH_TIMEOUT", "   ")
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        monkeypatch.setenv("ANSWERABLE_MAX_FILES", "lots")
+        monkeypatch.setenv("ANSWERABLE_GH_TIMEOUT", "   ")
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result == {}
 
     def test_env_only_without_config_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cwd = tmp_path / "cwd"
         cwd.mkdir()
-        monkeypatch.setenv("MAESTRO_REVIEW_GH_TIMEOUT", "45")
-        with patch("maestro_review.cli.Path.cwd", return_value=cwd):
+        monkeypatch.setenv("ANSWERABLE_GH_TIMEOUT", "45")
+        with patch("answerable.cli.Path.cwd", return_value=cwd):
             result = _load_review_defaults()
         assert result == {"gh_timeout": 45}

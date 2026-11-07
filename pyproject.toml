@@ -1,7 +1,7 @@
 [project]
-name = "maestro-review"
+name = "answerable"
 version = "0.1.0"
-description = "AI code review agent for GitHub pull requests, powered by the Claude Agent SDK"
+description = "AI code review for GitHub pull requests that blocks the merge until every finding is answered"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -20,8 +20,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thomas-sodon/maestro-review"
-Issues = "https://github.com/thomas-sodon/maestro-review/issues"
+Homepage = "https://github.com/thomas-sodon/answerable"
+Issues = "https://github.com/thomas-sodon/answerable/issues"
 "Parent project" = "https://github.com/thomas-sodon/maestro-agent"
 
 [project.optional-dependencies]
@@ -35,7 +35,7 @@ dev = [
 ]
 
 [project.scripts]
-maestro-review = "maestro_review.cli:main"
+answerable = "answerable.cli:main"
 
 [build-system]
 requires = ["setuptools>=77.0"]
@@ -45,7 +45,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-maestro_review = ["py.typed"]
+answerable = ["py.typed"]
 
 [tool.ruff]
 target-version = "py311"
@@ -68,7 +68,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["maestro_review"]
+known-first-party = ["answerable"]
 
 [tool.mypy]
 python_version = "3.11"

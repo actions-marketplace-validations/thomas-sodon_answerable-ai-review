@@ -9,18 +9,18 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from maestro_review.github import GitHubClient, GitHubError
-from maestro_review.markers import (
+from answerable.github import GitHubClient, GitHubError
+from answerable.markers import (
     _ALL_COMMENT_TERMINAL_MARKERS,
     _DISAGREEMENT_MARKER,
 )
-from maestro_review.prompt import CODE_REVIEW_PROMPT
-from maestro_review.sdk import REVIEW_EFFORT, REVIEW_MODEL, QueryOptions, query
+from answerable.prompt import CODE_REVIEW_PROMPT
+from answerable.sdk import REVIEW_EFFORT, REVIEW_MODEL, QueryOptions, query
 
 if TYPE_CHECKING:
-    from maestro_review.github import CodeHost
+    from answerable.github import CodeHost
 
-logger = logging.getLogger("maestro_review")
+logger = logging.getLogger("answerable")
 
 # File patterns to skip when truncating large diffs.
 _SKIP_PATTERNS = re.compile(
@@ -948,7 +948,7 @@ class PRReviewer:
                 f"({len(filtered)} skipped):\n{items}",
             )
         body_parts.append(
-            "\n\n---\n*AI-generated review by maestro-review — new findings "
+            "\n\n---\n*AI-generated review by Answerable — new findings "
             "fail this check*"
         )
 
@@ -963,7 +963,7 @@ class PRReviewer:
     # ------------------------------------------------------------------
 
     # Markers ``_thread_disputes_finding`` looks for in the last reply of a
-    # review thread.  The active marker is imported from ``maestro_review.markers``
+    # review thread.  The active marker is imported from ``answerable.markers``
     # so the two sites cannot drift; the legacy ``bug`` phrasing covers threads
     # closed under the older wording before the marker was renamed.
     _DISAGREEMENT_MARKERS: tuple[str, ...] = (
@@ -998,7 +998,7 @@ class PRReviewer:
         if finding.suggested_code:
             body += f"**Suggested code:**\n```\n{finding.suggested_code}\n```\n\n"
         body += (
-            "*Escalated by maestro-review: a reply on the review thread "
+            "*Escalated by Answerable: a reply on the review thread "
             "disputed this finding, and a later review raised it again.*"
         )
         return self._host.create_issue(
@@ -1308,7 +1308,7 @@ class PRReviewer:
         The host's read methods are best-effort and map every fetch failure to
         an empty result, so an unreachable ``gh`` would otherwise look like "all
         comments replied".  :meth:`CodeHost.check_connectivity` is probed first
-        and raises :class:`~maestro_review.github.GitHubError` on a genuine
+        and raises :class:`~answerable.github.GitHubError` on a genuine
         outage, letting the gate fail closed rather than pass falsely.
         """
         self._host.check_connectivity(pr_number)

@@ -1,5 +1,5 @@
-name: maestro-review
-description: AI code review for a GitHub pull request, powered by the Claude Agent SDK.
+name: Answerable AI Review
+description: AI PR review with Claude that blocks the merge until every finding is fixed, disputed or tracked.
 author: thomas-sodon
 branding:
   icon: check-circle
@@ -58,11 +58,11 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
-    - name: Install maestro-review
+    - name: Install answerable
       shell: bash
       run: python -m pip install --quiet "${{ github.action_path }}"
 
-    - name: Run maestro-review
+    - name: Run answerable
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -99,4 +99,4 @@ runs:
         [ -n "$INPUT_MAX_DIFF_CHARS" ] && args+=(--max-diff-chars "$INPUT_MAX_DIFF_CHARS")
         [ -n "$INPUT_MAX_FILES" ] && args+=(--max-files "$INPUT_MAX_FILES")
         [ -n "$INPUT_GH_TIMEOUT" ] && args+=(--gh-timeout "$INPUT_GH_TIMEOUT")
-        maestro-review "${args[@]}"
+        answerable "${args[@]}"

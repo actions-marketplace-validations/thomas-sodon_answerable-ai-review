@@ -1,4 +1,4 @@
-# maestro-review reference
+# Answerable reference
 
 Detailed behaviour of the CLI and the GitHub Action. For setup, see the
 [README](../README.md).
@@ -23,10 +23,10 @@ The GitHub token needs `pull-requests: write` to post reviews and
 ## CLI usage
 
 ```bash
-maestro-review --repo owner/repo --pr 42                     # review and post
-maestro-review --repo owner/repo --pr 42 --dry-run           # print findings, post nothing
-maestro-review --repo owner/repo --pr 42 --max-diff-chars 100000 --max-files 75
-maestro-review --repo owner/repo --pr 42 --require-comment-replies   # reply-coverage audit only
+answerable --repo owner/repo --pr 42                     # review and post
+answerable --repo owner/repo --pr 42 --dry-run           # print findings, post nothing
+answerable --repo owner/repo --pr 42 --max-diff-chars 100000 --max-files 75
+answerable --repo owner/repo --pr 42 --require-comment-replies   # reply-coverage audit only
 ```
 
 | Option | Default | Meaning |
@@ -71,8 +71,8 @@ and/or environment variables.
 **Config file.** The first of these files that exists and has a non-empty
 `[review]` section is used:
 
-1. the path in `MAESTRO_REVIEW_CONFIG`;
-2. `./maestro-review.toml`;
+1. the path in `ANSWERABLE_CONFIG`;
+2. `./answerable.toml`;
 3. `./maestro.toml` (compatible with a Maestro project config).
 
 ```toml
@@ -87,11 +87,11 @@ A file that fails to parse is ignored; a value that is not an integer falls
 back to its default.
 
 **Environment variables** override the config file:
-`MAESTRO_REVIEW_MAX_DIFF_CHARS`, `MAESTRO_REVIEW_MAX_FILES`,
-`MAESTRO_REVIEW_GH_TIMEOUT`, `MAESTRO_REVIEW_REQUIRE_COMMENT_REPLIES`
+`ANSWERABLE_MAX_DIFF_CHARS`, `ANSWERABLE_MAX_FILES`,
+`ANSWERABLE_GH_TIMEOUT`, `ANSWERABLE_REQUIRE_COMMENT_REPLIES`
 (integers; blank or non-integer values are ignored).
 
-The model and effort are fixed in `src/maestro_review/sdk.py` (`REVIEW_MODEL`,
+The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
 `REVIEW_EFFORT`).
 
 ## GitHub Action inputs
@@ -116,10 +116,10 @@ The action runs `actions/setup-python`, which puts the chosen `python-version`
 on the job's `PATH`, so later steps in the same job use that Python too. Run
 the action last, or set up your own Python again after it, if that matters.
 
-The examples use `@main` because no release is tagged yet. Since the action
+The examples use the moving `@v0` tag for brevity. Since the action
 receives an Anthropic credential, pin it to a full commit SHA in your own
-workflows (`uses: thomas-sodon/maestro-review@<commit-sha>`) so a later change
-to `main` cannot run with your secret unreviewed.
+workflows (`uses: thomas-sodon/answerable@<commit-sha>`) so a later change
+to a moving tag cannot run with your secret unreviewed.
 
 ## De-duplication rules
 

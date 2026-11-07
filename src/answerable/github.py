@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Protocol
 
-logger = logging.getLogger("maestro_review")
+logger = logging.getLogger("answerable")
 
 
 class GitHubError(Exception):

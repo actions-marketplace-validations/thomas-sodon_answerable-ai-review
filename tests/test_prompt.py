@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from maestro_review.prompt import CODE_REVIEW_PROMPT
+from answerable.prompt import CODE_REVIEW_PROMPT
 
 
 def test_prompt_is_repo_neutral() -> None:

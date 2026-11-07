@@ -33,7 +33,7 @@ from claude_agent_sdk.types import (
     UserMessage,
 )
 
-logger = logging.getLogger("maestro_review")
+logger = logging.getLogger("answerable")
 
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0

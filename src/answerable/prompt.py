@@ -164,6 +164,14 @@ even in the same file, function, or line; or when it merely shares a topic with
 an existing item (for example, both mention error handling) but describes a
 different failure. Summary text, praise, and acknowledgements are not findings.
 
+Every new finding has already been checked against the current code and
+describes a defect that is present now. So matching a new finding to a
+*resolved* thread means that thread's defect was not actually fixed: the thread
+will be reopened with a reply saying so. Be sure it is the same defect, not a
+different one that happens to sit where an already-fixed one used to. When a
+finding matches both a resolved thread and other items, cite the resolved
+thread.
+
 List only the duplicates, each with the id of the existing item it repeats.
 When unsure, it is not a duplicate: a repeated comment costs less than a lost
 defect.

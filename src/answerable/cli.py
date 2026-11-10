@@ -14,7 +14,9 @@ reviewer's findings unverified.
 
 A further fresh session then compares the surviving findings with feedback
 already on the PR — review threads, review summaries, and conversation comments
-from humans, other agents, or earlier runs — and drops any that repeat it.
+from humans, other agents, or earlier runs — and drops any that repeat it. A
+bug that repeats a *resolved* thread is still broken, so that thread gets a
+reply saying the defect persists and is unresolved instead.
 ``--skip-dedupe`` turns that pass off.
 
 Exits 1 whenever the reviewer produces a comment — i.e. a finding of any
@@ -242,6 +244,11 @@ def main() -> None:
             "Dedupe dropped %d finding(s) already raised on the PR",
             len(result.duplicates),
         )
+    if result.persisting:
+        log.info(
+            "Dedupe matched %d bug(s) to resolved threads they still affect",
+            len(result.persisting),
+        )
 
     if args.dry_run:
         # Apply the same filtering as the real run so the exit code matches.
@@ -250,6 +257,9 @@ def main() -> None:
         # with existing unresolved review threads.  Any finding that survives
         # both filters (i.e. would actually be posted or cause a reopen)
         # triggers exit 1, regardless of severity.
+        # Bugs the dedupe matched to a resolved thread would get a reply and
+        # reopen it, so they count too unless an open issue tracks them.
+        persisting = [p.finding for p in result.persisting]
         try:
             filtered_findings = reviewer._filter_tracked_findings(result.findings)
             if filtered_findings:
@@ -259,9 +269,11 @@ def main() -> None:
                 actioned = new_findings + [f for f, _ in reopen]
             else:
                 actioned = []
+            if persisting:
+                actioned += reviewer._filter_tracked_findings(persisting)
         except Exception:
             log.exception("Dry-run filtering failed; falling back to raw findings")
-            actioned = list(result.findings)
+            actioned = [*result.findings, *persisting]
         has_findings = bool(actioned)
 
         print(f"Summary: {result.summary}")
@@ -281,6 +293,14 @@ def main() -> None:
                     f"  [{o.severity}] {o.file}:{o.line} — {o.title} → "
                     f"[{n.severity}] {n.file}:{n.line} — {n.title}: {rv.reason}"
                 )
+        if result.persisting:
+            print(f"Still broken on resolved threads (would reopen): {len(result.persisting)}")
+            for pf in result.persisting:
+                f = pf.finding
+                print(
+                    f"  [{f.severity}] {f.file}:{f.line} — {f.title} "
+                    f"(reopens {pf.existing}): {pf.reason}"
+                )
         if result.duplicates:
             print(f"Already raised on the PR: {len(result.duplicates)}")
             for d in result.duplicates:
@@ -295,6 +315,7 @@ def main() -> None:
         post_result = reviewer.post_review(
             args.pr, result.findings, result.summary,
             diff=result.diff or None,
+            persisting=result.persisting,
         )
     except Exception:
         log.exception("Failed to post review comment")

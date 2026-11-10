@@ -24,6 +24,14 @@ _DISAGREEMENT_MARKER = "Could not prove this defect"
 # so the posted wording and the reviewer's detection cannot drift.
 _FIXED_LOCALLY_MARKER = "Fixed locally with implementation-plan context."
 
+# Opening of the reply the reviewer posts on a resolved review thread whose
+# defect is still present, before unresolving the thread.  The reply-coverage
+# gate treats a thread whose *last* reply carries it as still awaiting an
+# answer, so the reviewer's own reply never counts as one.
+_DEFECT_PERSISTS_MARKER = (
+    "This finding was previously resolved, but the defect persists"
+)
+
 # Every terminal verdict phrase a comment-remediation tool can post — bug verdicts
 # plus the suggestion / nit / human verdicts.  A line carrying one closes the
 # thread (or, on the overflow roll-up, the ``of-<hash>`` finding on that line).

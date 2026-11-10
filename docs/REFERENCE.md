@@ -17,7 +17,7 @@ Detailed behaviour of the CLI and the GitHub Action. For setup, see the
 | `ANTHROPIC_API_KEY` **or** `CLAUDE_CODE_OAUTH_TOKEN` | the review itself (not needed for `--require-comment-replies`) |
 | `GH_TOKEN` / `GITHUB_TOKEN` (or a `gh auth login` session) | reading the PR, posting reviews, opening escalation issues |
 
-The GitHub token needs `pull-requests: write` to post reviews and
+The GitHub token needs `pull-requests: write` to post reviews, reply on threads and unresolve them, and
 `issues: write` for the disputed-finding escalation.
 
 ## CLI usage
@@ -100,6 +100,15 @@ different severity, folded into a broader comment, or already resolved.
 
 - Duplicates are not posted. They are logged with the existing item they
   repeat, and `--dry-run` prints them under *Already raised on the PR*.
+- **A bug that repeats a resolved thread** (any author, no issue link) is not
+  dropped: the finding was verified against the current code, so that
+  thread's defect was never fixed. At posting time the thread is re-checked —
+  still there, still resolved, still no issue link, and no open issue tracking
+  the finding — and then gets a reply that the defect persists and is
+  unresolved. One reply per thread. `--dry-run` prints these under *Still
+  broken on resolved threads (would reopen)*; they fail the run like a newly
+  posted finding. Nits and suggestions that repeat a resolved thread are plain
+  duplicates.
 - Findings that the title matcher already ties to one of the reviewer's own
   threads are not sent: posting still applies its deterministic skip,
   *defect persists* re-flag and disputed-finding escalation to them.
@@ -113,7 +122,7 @@ different severity, folded into a broader comment, or already resolved.
 
 | Mode | Exit `0` | Exit `1` |
 |---|---|---|
-| Review (default) | Nothing new was posted: no findings, an empty diff, or every finding was already tracked by an issue, escalated to an issue, or matched an existing thread that is still open (or was resolved with an issue link) | At least one finding (any severity) was newly posted, or a bug was flagged as persisting with a reply on its resolved thread; **or** the review failed (API/SDK error); **or** posting the review failed (findings are then printed to the log) |
+| Review (default) | Nothing new was posted: no findings, an empty diff, or every finding was already tracked by an issue, escalated to an issue, or matched an existing thread that is still open (or was resolved with an issue link) | At least one finding (any severity) was newly posted, or a bug was flagged as persisting with a reply on its resolved thread, which was unresolved; **or** the review failed (API/SDK error); **or** posting the review failed (findings are then printed to the log) |
 | `--dry-run` | No finding would be posted or flagged as persisting after the same issue/thread filtering a real run applies | At least one finding would be posted or flagged as persisting (if the filtering itself errors, any raw finding counts); **or** the review failed |
 | `--require-comment-replies` | Every reviewer finding has been answered | At least one unanswered finding; **or** the audit could not read the PR (a `gh`/GraphQL outage fails closed) |
 
@@ -121,7 +130,11 @@ Invalid or missing arguments exit `2` (standard `argparse` behaviour).
 
 A finding counts as **answered** when:
 
-- *inline*: its thread is resolved, outdated, or has any reply;
+- *inline*: its thread is resolved, outdated, or has any reply — except
+  that a thread whose last reply is the reviewer's own *"This finding was
+  previously resolved, but the defect persists"* reply is unanswered until
+  someone replies after it (on any thread, including ones other people
+  opened);
 - *overflow*: a PR comment containing the `<!-- answerable:overflow-ack -->` marker
   lists its `of-<hash>` handle on a line together with one of these verdict
   phrases: `Could not prove this defect`, `Could not prove this bug`,
@@ -199,8 +212,10 @@ Before posting, the reviewer filters findings against the PR's current state:
 - findings already tracked by an open GitHub issue are dropped;
 - findings matching an existing review thread are skipped — except a
   bug-severity finding whose thread was resolved without an issue link while
-  the problem is still there: the thread stays resolved, but the reviewer
-  replies on it that the defect persists;
+  the problem is still there: the reviewer replies on it that the defect
+  persists and unresolves the thread. The same happens to anyone's resolved
+  thread that the [dedupe session](#dedupe-against-existing-feedback) matches
+  a bug to;
 - findings on a thread where someone replied *"Could not prove this defect"*
   are escalated to a GitHub issue (labels `ai-review` and the severity)
   instead of being re-posted.

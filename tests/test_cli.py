@@ -33,6 +33,7 @@ class FakeResult:
     refuted: list[object] = field(default_factory=list)
     revised: list[object] = field(default_factory=list)
     duplicates: list[object] = field(default_factory=list)
+    persisting: list[object] = field(default_factory=list)
 
 
 @dataclass

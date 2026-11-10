@@ -2012,6 +2012,8 @@ def test_post_review_replies_on_resolved_thread() -> None:
         assert args[0] == 10
         assert args[1] == 555
         assert "defect persists" in args[2].lower()
+    # The thread is unresolved after the reply.
+    host.unresolve_review_thread.assert_called_once_with("PRRT_99")
     # No new review posted (all findings went to reopen)
     host.post_pr_review.assert_not_called()
     assert result.reopened == [bug]

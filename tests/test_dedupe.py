@@ -147,7 +147,7 @@ async def test_thread_matched_findings_bypass_dedupe() -> None:
     """A finding the title matcher ties to a thread stays on the deterministic
     skip / defect-persists / dispute path in post_review, so it is neither sent
     to the dedupe session nor dropped by it."""
-    own_thread = _thread("\U0001f41b **Division by zero**\n\ny divides by zero", resolved=True)
+    own_thread = _thread("\U0001f41b **Division by zero**\n\ny divides by zero")
     dedupe = _result({"duplicates": [
         {"id": 0, "existing": "T0", "reason": "same thread"},
     ]})

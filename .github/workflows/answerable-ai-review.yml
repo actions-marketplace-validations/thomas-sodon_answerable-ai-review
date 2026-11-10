@@ -1,0 +1,59 @@
+name: Answerable AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Re-check reply coverage when someone replies to (or reviews) a finding,
+  # so the gate turns green without another push.
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # Fail while earlier findings are still unanswered (no Claude call, no credential).
+  replies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    # Pushes and replies use separate groups, so a reply never cancels the
+    # gate a push's review is waiting on.
+    concurrency:
+      group: answerable-replies-${{ github.event.pull_request.number }}-${{ github.event_name == 'pull_request' && 'push' || 'reply' }}
+      cancel-in-progress: true
+    steps:
+      - name: Reply coverage
+        uses: thomas-sodon/answerable-ai-review@ab20bdb0dbf2aa5b132ff1f4195e509331587645 # v0.1.0
+        with:
+          mode: replies
+
+  # Review the diff with Claude and post findings. Runs after the gate so the
+  # gate sees the state as of this push, and runs whether the gate passed or
+  # failed, but not when it (or the run) was cancelled by a newer push.
+  # Skipped on fork PRs, which get neither repository secrets nor a write token.
+  review:
+    needs: replies
+    if: >-
+      !cancelled() &&
+      (needs.replies.result == 'success' || needs.replies.result == 'failure') &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # One review per PR at a time; a newer push cancels an older review.
+    concurrency:
+      group: answerable-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Review
+        uses: thomas-sodon/answerable-ai-review@ab20bdb0dbf2aa5b132ff1f4195e509331587645 # v0.1.0
+        with:
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

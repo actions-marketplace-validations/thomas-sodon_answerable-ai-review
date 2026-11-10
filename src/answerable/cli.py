@@ -5,11 +5,17 @@ Usage:
     answerable --repo owner/repo --pr 42 [--dry-run]
     answerable --repo owner/repo --pr 42 --require-comment-replies
     answerable --repo owner/repo --pr 42 --skip-verification
+    answerable --repo owner/repo --pr 42 --skip-dedupe
 
 Findings are adversarially verified before posting: a second agent session,
 fresh and sharing none of the reviewer's context, tries to disprove each one,
 and findings it refutes are dropped. ``--skip-verification`` posts the
 reviewer's findings unverified.
+
+A further fresh session then compares the surviving findings with feedback
+already on the PR — review threads, review summaries, and conversation comments
+from humans, other agents, or earlier runs — and drops any that repeat it.
+``--skip-dedupe`` turns that pass off.
 
 Exits 1 whenever the reviewer produces a comment — i.e. a finding of any
 severity (bug, suggestion, or nit) is newly posted, or a bug is flagged as
@@ -53,6 +59,8 @@ _DEFAULT_GH_TIMEOUT = 30
 _DEFAULT_REQUIRE_COMMENT_REPLIES = 0
 # Adversarial verification default (1 = on). Stored as 0/1 like the gate.
 _DEFAULT_VERIFY_FINDINGS = 1
+# Dedupe-against-existing-feedback default (1 = on).
+_DEFAULT_DEDUPE_FINDINGS = 1
 
 _CONFIG_KEYS: dict[str, int] = {
     "max_diff_chars": _DEFAULT_MAX_DIFF_CHARS,
@@ -60,6 +68,7 @@ _CONFIG_KEYS: dict[str, int] = {
     "gh_timeout": _DEFAULT_GH_TIMEOUT,
     "require_comment_replies": _DEFAULT_REQUIRE_COMMENT_REPLIES,
     "verify_findings": _DEFAULT_VERIFY_FINDINGS,
+    "dedupe_findings": _DEFAULT_DEDUPE_FINDINGS,
 }
 
 # Environment variable naming an explicit config file (searched first).
@@ -162,6 +171,17 @@ def main() -> None:
             "verification pass that drops findings a fresh session refutes"
         ),
     )
+    parser.add_argument(
+        "--skip-dedupe",
+        action="store_true",
+        default=not toml_defaults.get(
+            "dedupe_findings", _DEFAULT_DEDUPE_FINDINGS,
+        ),
+        help=(
+            "Skip the session that drops findings repeating feedback already "
+            "on the PR (from humans, other agents, or earlier reviews)"
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -173,6 +193,7 @@ def main() -> None:
         max_files=args.max_files,
         gh_timeout=args.gh_timeout,
         verify_findings=not args.skip_verification,
+        dedupe_findings=not args.skip_dedupe,
     )
 
     if args.require_comment_replies:
@@ -214,7 +235,12 @@ def main() -> None:
         log.info(
             "Adversarial verification dropped %d and revised %d of %d finding(s)",
             len(result.refuted), len(result.revised),
-            len(result.refuted) + len(result.findings),
+            len(result.refuted) + len(result.findings) + len(result.duplicates),
+        )
+    if result.duplicates:
+        log.info(
+            "Dedupe dropped %d finding(s) already raised on the PR",
+            len(result.duplicates),
         )
 
     if args.dry_run:
@@ -254,6 +280,14 @@ def main() -> None:
                 print(
                     f"  [{o.severity}] {o.file}:{o.line} — {o.title} → "
                     f"[{n.severity}] {n.file}:{n.line} — {n.title}: {rv.reason}"
+                )
+        if result.duplicates:
+            print(f"Already raised on the PR: {len(result.duplicates)}")
+            for d in result.duplicates:
+                f = d.finding
+                print(
+                    f"  [{f.severity}] {f.file}:{f.line} — {f.title} "
+                    f"(repeats {d.existing}): {d.reason}"
                 )
         sys.exit(1 if has_findings else 0)
 

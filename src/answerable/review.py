@@ -14,7 +14,7 @@ from answerable.markers import (
     _ALL_COMMENT_TERMINAL_MARKERS,
     _DISAGREEMENT_MARKER,
 )
-from answerable.prompt import CODE_REVIEW_PROMPT, VERIFY_FINDINGS_PROMPT
+from answerable.prompt import CODE_REVIEW_PROMPT, DEDUPE_FINDINGS_PROMPT, VERIFY_FINDINGS_PROMPT
 from answerable.sdk import REVIEW_EFFORT, REVIEW_MODEL, QueryOptions, query
 
 if TYPE_CHECKING:
@@ -56,6 +56,12 @@ _TITLE_STOPWORDS = frozenset({
 # Extracts the first ``**...**`` bold block from a comment body. ``DOTALL`` so
 # titles that wrap onto a second line are still captured in one piece.
 _THREAD_TITLE_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+# Budget for the existing-feedback context sent to the dedupe session: each
+# item's text is clipped to the per-item limit, and items past the total are
+# omitted (oldest kept first, matching GitHub's chronological order).
+_DEDUPE_ITEM_CHARS = 2_000
+_DEDUPE_TOTAL_CHARS = 60_000
 
 # Overlap-coefficient threshold for treating two normalized titles as the
 # same finding (|A ∩ B| / min(|A|, |B|) >= threshold).
@@ -399,6 +405,15 @@ class RevisedFinding:
 
 
 @dataclass
+class DuplicateFinding:
+    """A finding the dedupe session matched to feedback already on the PR."""
+
+    finding: ReviewFinding
+    existing: str  # Human-readable label of the existing item it repeats
+    reason: str
+
+
+@dataclass
 class ReviewResult:
     """Complete review output.
 
@@ -406,7 +421,9 @@ class ReviewResult:
     every finding, when verification is off or could not run), with any
     verifier corrections already applied; ``refuted`` holds the ones the
     verifier disproved, which are never posted; ``revised`` records each
-    correction, whose ``revised`` finding is the one in ``findings``.
+    correction, whose ``revised`` finding is the one in ``findings``;
+    ``duplicates`` holds findings the dedupe session matched to feedback
+    already on the PR, which are never posted either.
     """
 
     findings: list[ReviewFinding] = field(default_factory=list)
@@ -416,6 +433,7 @@ class ReviewResult:
     diff: str = ""
     refuted: list[RefutedFinding] = field(default_factory=list)
     revised: list[RevisedFinding] = field(default_factory=list)
+    duplicates: list[DuplicateFinding] = field(default_factory=list)
 
 
 @dataclass
@@ -430,6 +448,8 @@ class ReviewThread:
     reply_bodies: list[str] = field(default_factory=list)  # Individual reply bodies (excludes root)
     is_resolved: bool = False
     is_outdated: bool = False  # True when the commented code has changed
+    line: int | None = None  # Root comment's line (current, else original)
+    author: str = ""         # Root comment author's login ("" when unknown)
 
 
 @dataclass
@@ -468,9 +488,10 @@ class _Verdict:
 
 
 def _review_query_options() -> QueryOptions:
-    """Options shared by the review and verification queries.
+    """Options for every reviewer query.
 
-    Read-only tools only.  No resume/continue option exists on
+    Shared by the review, verification and dedupe sessions.  Read-only
+    tools only.  No resume/continue option exists on
     :class:`QueryOptions`, so every :func:`query` made with these options
     starts a fresh session.
     """
@@ -501,9 +522,11 @@ class PRReviewer:
         max_files: int = 50,
         code_host: CodeHost | None = None,
         verify_findings: bool = True,
+        dedupe_findings: bool = True,
     ) -> None:
         self._repo = github_repo
         self._verify_findings = verify_findings
+        self._dedupe_findings = dedupe_findings
         self._max_diff_chars = max_diff_chars
         self._max_files = max_files
         self._host = code_host or GitHubClient(
@@ -614,6 +637,10 @@ class PRReviewer:
             root = comments[0]
             all_bodies = "\n".join(c.get("body") or "" for c in comments)
             reply_bodies = [c.get("body") or "" for c in comments[1:]]
+            raw_line = root.get("line")
+            if raw_line is None:
+                raw_line = root.get("originalLine")
+            author = root.get("author")
             threads.append(ReviewThread(
                 thread_id=node.get("id", ""),
                 comment_id=_safe_int(root.get("databaseId")),
@@ -623,6 +650,8 @@ class PRReviewer:
                 reply_bodies=reply_bodies,
                 is_resolved=bool(node.get("isResolved", False)),
                 is_outdated=bool(node.get("isOutdated", False)),
+                line=_safe_int(raw_line) if raw_line is not None else None,
+                author=str(author.get("login") or "") if isinstance(author, dict) else "",
             ))
         return threads
 
@@ -916,9 +945,194 @@ class PRReviewer:
             cost_usd=sdk_result.usage.total_cost_usd,
             diff=diff,
         )
-        if self._verify_findings and findings:
+        if self._verify_findings and result.findings:
             await self._verify(result, info, truncated_diff)
+        if self._dedupe_findings and result.findings:
+            await self._dedupe(pr_number, result)
         return result
+
+    # ------------------------------------------------------------------
+    # Dedupe against existing PR feedback (fresh session)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clip(text: str, limit: int) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n[… clipped, {len(text)} chars total]"
+
+    def _collect_existing_feedback(
+        self,
+        pr_number: int,
+        threads: list[ReviewThread],
+    ) -> list[tuple[str, str, str]]:
+        """Return ``(id, label, text)`` for every piece of feedback on the PR.
+
+        Covers inline review threads (any author, any state — root plus
+        replies), submitted review bodies (earlier runs' summaries and overflow
+        lists, other agents' review summaries), and PR conversation comments.
+        Empty bodies are skipped.  Every item is clipped to
+        :data:`_DEDUPE_ITEM_CHARS`.
+        """
+        items: list[tuple[str, str, str]] = []
+        for idx, thread in enumerate(threads):
+            state = [
+                s for s, on in (("resolved", thread.is_resolved), ("outdated", thread.is_outdated)) if on
+            ] or ["open"]
+            where = f"{thread.path}:{thread.line}" if thread.line else thread.path or "(no path)"
+            by = f" by @{thread.author}" if thread.author else ""
+            label = f"review thread on {where}{by} ({', '.join(state)})"
+            parts = [thread.body or ""]
+            parts.extend(f"Reply: {r}" for r in thread.reply_bodies if r.strip())
+            text = "\n\n".join(p for p in parts if p.strip())
+            if text:
+                items.append((f"T{idx}", label, self._clip(text, _DEDUPE_ITEM_CHARS)))
+        for idx, body in enumerate(self._host.get_pr_review_bodies(pr_number)):
+            if body.strip():
+                items.append((f"R{idx}", "review summary", self._clip(body, _DEDUPE_ITEM_CHARS)))
+        for idx, body in enumerate(self._host.get_pr_comment_bodies(pr_number)):
+            if body.strip():
+                items.append((f"C{idx}", "conversation comment", self._clip(body, _DEDUPE_ITEM_CHARS)))
+        return items
+
+    @staticmethod
+    def _format_existing_feedback(items: list[tuple[str, str, str]]) -> str:
+        """Render *items* for the dedupe prompt within :data:`_DEDUPE_TOTAL_CHARS`."""
+        blocks: list[str] = []
+        total = 0
+        for item_id, label, text in items:
+            block = f"### {item_id} — {label}\n{text}"
+            if total + len(block) > _DEDUPE_TOTAL_CHARS and blocks:
+                omitted = len(items) - len(blocks)
+                logger.warning(
+                    "Dedupe context budget reached; omitting %d of %d existing item(s)",
+                    omitted, len(items),
+                )
+                blocks.append(f"[{omitted} more existing item(s) omitted due to size limits]")
+                break
+            blocks.append(block)
+            total += len(block)
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _parse_duplicates(data: Any, valid_ids: set[str]) -> dict[int, tuple[str, str]]:
+        """Map finding id → ``(existing id, reason)`` from the dedupe JSON.
+
+        An entry whose finding id is not an integer, or whose ``existing`` id
+        does not name an item that was actually shown, is skipped — the
+        finding is then kept.  The first entry for a finding id wins.
+        """
+        if isinstance(data, dict):
+            items = data.get("duplicates") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        result: dict[int, tuple[str, str]] = {}
+        if not isinstance(items, list):
+            return result
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("id")
+            if isinstance(raw_id, bool):
+                continue
+            try:
+                idx = int(raw_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            existing = str(item.get("existing") or "").strip()
+            if existing not in valid_ids:
+                continue
+            result.setdefault(idx, (existing, str(item.get("reason") or "").strip()))
+        return result
+
+    async def _dedupe(self, pr_number: int, result: ReviewResult) -> None:
+        """Drop findings that repeat feedback already on the PR.
+
+        Runs in its own fresh :func:`query` session, sharing no context with
+        the review or verification sessions.  It sees the new findings and
+        every existing piece of PR feedback — inline threads from any author
+        in any state, review summaries, and conversation comments — and lists
+        the findings that repeat an existing item.  Those move from
+        ``result.findings`` to ``result.duplicates``.
+
+        Findings the deterministic title matcher already ties to a review
+        thread (:meth:`_match_finding_to_thread`) are not sent: posting routes
+        those through the skip / defect-persists / dispute-escalation paths in
+        :meth:`post_review`, which must keep seeing them.
+
+        Fails open: a failed fetch or query, an unparseable response, or a
+        duplicate citing an unknown existing item keeps the finding.
+        """
+        try:
+            raw_threads = self._host.get_pr_review_threads(pr_number)
+            threads = self._parse_review_threads(raw_threads) if raw_threads else []
+            candidates = [
+                (idx, f) for idx, f in enumerate(result.findings)
+                if self._match_finding_to_thread(f, threads) is None
+            ]
+            if not candidates:
+                return
+            existing = self._collect_existing_feedback(pr_number, threads)
+        except Exception:
+            logger.warning(
+                "Failed to fetch existing PR feedback for dedupe; keeping all "
+                "%d finding(s)", len(result.findings), exc_info=True,
+            )
+            return
+        if not existing:
+            return
+
+        prompt = DEDUPE_FINDINGS_PROMPT.format(
+            findings=self._format_findings_for_verification([f for _, f in candidates]),
+            existing=self._format_existing_feedback(existing),
+        )
+        try:
+            sdk_result = await query(prompt=prompt, options=_review_query_options())
+        except Exception:
+            logger.warning(
+                "Dedupe session failed; keeping all %d finding(s)",
+                len(result.findings), exc_info=True,
+            )
+            return
+
+        result.tokens_used += sdk_result.usage.total_tokens
+        if sdk_result.usage.total_cost_usd is not None:
+            result.cost_usd = (result.cost_usd or 0.0) + sdk_result.usage.total_cost_usd
+
+        try:
+            data = sdk_result.parse_json()
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "Failed to parse dedupe JSON; keeping all %d finding(s)",
+                len(result.findings),
+            )
+            return
+
+        labels = {item_id: f"{item_id} ({label})" for item_id, label, _ in existing}
+        duplicates = self._parse_duplicates(data, set(labels))
+        drop: dict[int, tuple[str, str]] = {}
+        for local_idx, (global_idx, _) in enumerate(candidates):
+            if local_idx in duplicates:
+                drop[global_idx] = duplicates[local_idx]
+
+        kept: list[ReviewFinding] = []
+        for idx, finding in enumerate(result.findings):
+            if idx not in drop:
+                kept.append(finding)
+                continue
+            existing_id, reason = drop[idx]
+            logger.info(
+                "Dedupe dropped %s '%s' in %s:%d — repeats %s: %s",
+                finding.severity, finding.title, finding.file, finding.line,
+                labels[existing_id], reason or "(no reason given)",
+            )
+            result.duplicates.append(DuplicateFinding(
+                finding=finding, existing=labels[existing_id], reason=reason,
+            ))
+        result.findings = kept
 
     # ------------------------------------------------------------------
     # Adversarial verification (fresh session)

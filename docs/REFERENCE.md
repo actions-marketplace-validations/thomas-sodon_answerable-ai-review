@@ -28,6 +28,7 @@ answerable --repo owner/repo --pr 42 --dry-run           # print findings, post 
 answerable --repo owner/repo --pr 42 --max-diff-chars 100000 --max-files 75
 answerable --repo owner/repo --pr 42 --require-comment-replies   # reply-coverage audit only
 answerable --repo owner/repo --pr 42 --skip-verification         # post findings unverified
+answerable --repo owner/repo --pr 42 --skip-dedupe               # don't drop findings already raised on the PR
 ```
 
 | Option | Default | Meaning |
@@ -40,6 +41,7 @@ answerable --repo owner/repo --pr 42 --skip-verification         # post findings
 | `--dry-run` | off | Print the summary and findings to stdout instead of posting |
 | `--require-comment-replies` | off | Check-only mode: skip the review, audit reply coverage |
 | `--skip-verification` | off | Skip the adversarial verification pass and post the reviewer's findings as-is |
+| `--skip-dedupe` | off | Skip the session that drops findings repeating feedback already on the PR |
 
 `--require-comment-replies` takes precedence: when it is set, `--dry-run` has
 no effect and no diff review is run.
@@ -75,6 +77,38 @@ and answers one verdict per finding:
   model cost otherwise. Disable it with `--skip-verification`,
   `verify_findings = 0`, or the `verify-findings: false` action input.
 
+## Dedupe against existing feedback
+
+After verification, another fresh `query()` session — sharing no context with
+the review or verification sessions — makes sure no new finding repeats
+feedback already on the PR, from anyone: people, other bots or review agents,
+and earlier Answerable runs. It receives the surviving findings (site,
+severity, title, description) and every existing item:
+
+| Id | Source | Includes |
+|---|---|---|
+| `T<n>` | Inline review threads, any author, open, resolved or outdated | Path, line, author, state, root comment and replies |
+| `R<n>` | Submitted review bodies | Summaries, including earlier runs' *Additional findings* lists |
+| `C<n>` | PR conversation comments | Comment text |
+
+Each item is clipped to 2,000 characters and the whole context to 60,000;
+items past the budget are omitted (logged). The session has the same read-only
+tools, so it can check whether shifted line numbers point at the same code. It
+lists each finding that repeats an existing item, citing that item's id — the
+same defect counts as a repeat even when reworded, on a shifted line, at a
+different severity, folded into a broader comment, or already resolved.
+
+- Duplicates are not posted. They are logged with the existing item they
+  repeat, and `--dry-run` prints them under *Already raised on the PR*.
+- Findings that the title matcher already ties to one of the reviewer's own
+  threads are not sent: posting still applies its deterministic skip,
+  *defect persists* re-flag and disputed-finding escalation to them.
+- Fails open: a failed fetch or session, an unparseable response, or a
+  duplicate citing an id that was not shown keeps the finding. The session is
+  skipped when there are no candidate findings or no existing feedback.
+- Disable it with `--skip-dedupe`, `dedupe_findings = 0`, or the
+  `dedupe-findings: false` action input.
+
 ## Exit codes
 
 | Mode | Exit `0` | Exit `1` |
@@ -98,7 +132,7 @@ A finding counts as **answered** when:
 ## Configuration
 
 Command-line options always win. Defaults for `max_diff_chars`, `max_files`,
-`gh_timeout`, `require_comment_replies` and `verify_findings` can also come from a config file
+`gh_timeout`, `require_comment_replies`, `verify_findings` and `dedupe_findings` can also come from a config file
 and/or environment variables.
 
 **Config file.** The first of these files that exists and has a non-empty
@@ -114,6 +148,7 @@ max_files = 50
 gh_timeout = 30
 require_comment_replies = 0   # 1 = run in reply-coverage audit mode by default
 verify_findings = 1           # 0 = skip adversarial verification of findings
+dedupe_findings = 1           # 0 = skip dedupe against existing PR feedback
 ```
 
 A file that fails to parse is ignored; a value that is not an integer falls
@@ -122,7 +157,7 @@ back to its default.
 **Environment variables** override the config file:
 `ANSWERABLE_MAX_DIFF_CHARS`, `ANSWERABLE_MAX_FILES`,
 `ANSWERABLE_GH_TIMEOUT`, `ANSWERABLE_REQUIRE_COMMENT_REPLIES`,
-`ANSWERABLE_VERIFY_FINDINGS`
+`ANSWERABLE_VERIFY_FINDINGS`, `ANSWERABLE_DEDUPE_FINDINGS`
 (integers; blank or non-integer values are ignored).
 
 The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
@@ -140,6 +175,7 @@ The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
 | `mode` | `review` | `review` or `replies` (`--require-comment-replies`; needs no Claude credential) |
 | `dry-run` | `false` | `true` prints findings instead of posting |
 | `verify-findings` | `true` | `false` skips the [adversarial verification](#adversarial-verification) pass |
+| `dedupe-findings` | `true` | `false` skips the [dedupe against existing feedback](#dedupe-against-existing-feedback) pass |
 | `max-diff-chars`, `max-files`, `gh-timeout` | tool defaults | Passed through to the CLI |
 | `python-version` | `3.14` | Python used to run the reviewer |
 

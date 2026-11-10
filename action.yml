@@ -38,6 +38,10 @@ inputs:
     description: "'true' runs a second, fresh Claude session that tries to disprove each finding and drops the ones it refutes; 'false' posts findings unverified."
     required: false
     default: "true"
+  dedupe-findings:
+    description: "'true' runs a fresh Claude session that drops findings repeating feedback already on the PR (humans, other agents, earlier reviews); 'false' skips it."
+    required: false
+    default: "true"
   max-diff-chars:
     description: Maximum diff characters sent to the model (empty = tool default).
     required: false
@@ -77,6 +81,7 @@ runs:
         INPUT_MODE: ${{ inputs.mode }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_VERIFY_FINDINGS: ${{ inputs.verify-findings }}
+        INPUT_DEDUPE_FINDINGS: ${{ inputs.dedupe-findings }}
         INPUT_MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         INPUT_MAX_FILES: ${{ inputs.max-files }}
         INPUT_GH_TIMEOUT: ${{ inputs.gh-timeout }}
@@ -102,6 +107,7 @@ runs:
         esac
         [ "$INPUT_DRY_RUN" = "true" ] && args+=(--dry-run)
         [ "$INPUT_VERIFY_FINDINGS" = "false" ] && args+=(--skip-verification)
+        [ "$INPUT_DEDUPE_FINDINGS" = "false" ] && args+=(--skip-dedupe)
         [ -n "$INPUT_MAX_DIFF_CHARS" ] && args+=(--max-diff-chars "$INPUT_MAX_DIFF_CHARS")
         [ -n "$INPUT_MAX_FILES" ] && args+=(--max-files "$INPUT_MAX_FILES")
         [ -n "$INPUT_GH_TIMEOUT" ] && args+=(--gh-timeout "$INPUT_GH_TIMEOUT")

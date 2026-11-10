@@ -32,6 +32,7 @@ class FakeResult:
     diff: str | None = None
     refuted: list[object] = field(default_factory=list)
     revised: list[object] = field(default_factory=list)
+    duplicates: list[object] = field(default_factory=list)
 
 
 @dataclass
@@ -493,6 +494,7 @@ class TestTomlConfigIntegration:
                 max_files=review_pr_mod._DEFAULT_MAX_FILES,
                 gh_timeout=review_pr_mod._DEFAULT_GH_TIMEOUT,
                 verify_findings=True,
+                dedupe_findings=True,
             )
 
     def test_gh_timeout_cli_override(self) -> None:
@@ -514,6 +516,7 @@ class TestTomlConfigIntegration:
                 max_files=review_pr_mod._DEFAULT_MAX_FILES,
                 gh_timeout=60,
                 verify_findings=True,
+                dedupe_findings=True,
             )
 
 
@@ -746,6 +749,7 @@ class TestTomlDefaultsNotFrozenAtImport:
                 max_files=7,
                 gh_timeout=999,
                 verify_findings=True,
+                dedupe_findings=True,
             )
 
 
@@ -841,3 +845,56 @@ class TestAdversarialVerificationFlag:
         assert (
             "[bug] a.py:3 — Leak → [suggestion] a.py:9 — Leak on error path: only on error"
         ) in out
+
+
+class TestDedupeFlag:
+    """--skip-dedupe / dedupe_findings wire through to PRReviewer."""
+
+    def _run(self, argv: list[str], defaults: dict[str, int]) -> object:
+        result = FakeResult(summary="clean", findings=[])
+        with (
+            patch.object(sys, "argv", argv),
+            patch("answerable.cli._load_review_defaults", return_value=defaults),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.run.return_value = result
+            mock_cls.return_value.post_review.return_value = _post_result()
+            review_pr_mod.main()
+        return mock_cls.call_args.kwargs["dedupe_findings"]
+
+    def test_dedupe_on_by_default(self) -> None:
+        assert self._run(BASE_ARGV, {}) is True
+
+    def test_skip_dedupe_flag_disables_it(self) -> None:
+        assert self._run([*BASE_ARGV, "--skip-dedupe"], {}) is False
+
+    def test_config_can_disable_dedupe(self) -> None:
+        assert self._run(BASE_ARGV, {"dedupe_findings": 0}) is False
+
+    def test_dry_run_prints_duplicates(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from answerable.review import DuplicateFinding, ReviewFinding
+
+        dup = DuplicateFinding(
+            finding=ReviewFinding(
+                file="a.py", line=4, severity="bug", title="Race",
+                description="d", fix_plan="f",
+            ),
+            existing="T0 (review thread on a.py:4 by @alice (open))",
+            reason="alice already flagged the race",
+        )
+        result = FakeResult(summary="s", findings=[], duplicates=[dup])
+        with (
+            patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.run.return_value = result
+            mock_cls.return_value._filter_tracked_findings.return_value = []
+            with pytest.raises(SystemExit) as exc:
+                review_pr_mod.main()
+
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "Already raised on the PR: 1" in out
+        assert "a.py:4 — Race (repeats T0 (review thread on a.py:4 by @alice (open)))" in out

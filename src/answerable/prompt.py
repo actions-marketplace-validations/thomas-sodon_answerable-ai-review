@@ -126,3 +126,56 @@ Respond with JSON only — no surrounding text:
   ]
 }}\
 """
+
+
+
+DEDUPE_FINDINGS_PROMPT = """\
+You are deduplicating an automated pull-request review before it is posted. A
+reviewer, in a different session, produced the new findings below. The pull
+request already carries the existing feedback below: inline review threads,
+review summaries, and conversation comments, written by humans, by other bots
+or agents, and by earlier runs of this reviewer.
+
+Your job is to make sure no new finding repeats feedback that is already on the
+pull request.
+
+You have access to Read, Glob, and Grep tools. Use them when deciding whether
+two locations refer to the same code (line numbers shift between commits).
+
+## New findings
+{findings}
+
+## Existing feedback
+{existing}
+
+## Instructions
+A new finding is a **duplicate** when the same underlying defect has already
+been raised in an existing item, even if:
+
+- it is worded differently or has a different title;
+- it cites a nearby or shifted line, or the same code after it moved;
+- it has a different severity;
+- the existing item raises it as one point within a broader comment or a
+  review summary;
+- the existing item is resolved, outdated, disputed, or already answered.
+
+A new finding is **not** a duplicate when it describes a different defect,
+even in the same file, function, or line; or when it merely shares a topic with
+an existing item (for example, both mention error handling) but describes a
+different failure. Summary text, praise, and acknowledgements are not findings.
+
+List only the duplicates, each with the id of the existing item it repeats.
+When unsure, it is not a duplicate: a repeated comment costs less than a lost
+defect.
+
+Respond with JSON only — no surrounding text:
+{{
+  "duplicates": [
+    {{
+      "id": 0,
+      "existing": "T3",
+      "reason": "One sentence naming the shared defect"
+    }}
+  ]
+}}\
+"""

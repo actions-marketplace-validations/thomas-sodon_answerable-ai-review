@@ -115,9 +115,11 @@ def _reviewer(host: MagicMock | None = None) -> PRReviewer:
         # Defaults so filtering is a no-op unless a test configures them.
         host.list_issues.return_value = []
         host.get_pr_review_threads.return_value = []
-    # Verification off: these tests cover the single review call; the
-    # adversarial pass is covered in tests/test_verification.py.
-    return PRReviewer("owner/repo", code_host=host, verify_findings=False)
+    # Verification and dedupe off: these tests cover the single review call;
+    # the follow-up sessions are covered in test_verification.py / test_dedupe.py.
+    return PRReviewer(
+        "owner/repo", code_host=host, verify_findings=False, dedupe_findings=False,
+    )
 
 
 def _sdk_result(response_data: dict[str, object]) -> QueryResult:

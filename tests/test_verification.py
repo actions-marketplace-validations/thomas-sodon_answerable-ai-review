@@ -50,7 +50,9 @@ def _review_result() -> QueryResult:
 
 
 async def _run(*responses: object, verify: bool = True) -> tuple[object, AsyncMock]:
-    reviewer = PRReviewer("owner/repo", code_host=_host(), verify_findings=verify)
+    reviewer = PRReviewer(
+        "owner/repo", code_host=_host(), verify_findings=verify, dedupe_findings=False,
+    )
     with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.side_effect = list(responses)
         result = await reviewer.review(1)

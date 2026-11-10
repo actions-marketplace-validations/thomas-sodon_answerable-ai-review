@@ -178,6 +178,25 @@ class TestGetPrReviewThreads:
         )
         assert "isOutdated" in query_arg
 
+    def test_graphql_query_includes_comment_line_and_author(self) -> None:
+        """The dedupe session labels existing threads with location and author."""
+        client = GitHubClient(repo="owner/repo")
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}},
+        })
+
+        with patch.object(client, "_run", return_value=mock_result) as mock_run:
+            client.get_pr_review_threads(1)
+
+        cmd = mock_run.call_args[0][0]
+        query_arg = next(
+            cmd[i + 1] for i, v in enumerate(cmd)
+            if v == "-f" and cmd[i + 1].startswith("query=")
+        )
+        for fragment in ("line", "originalLine", "author{login}"):
+            assert fragment in query_arg
+
     def test_success_returns_nodes(self) -> None:
         """get_pr_review_threads returns thread nodes on success."""
         client = GitHubClient(repo="owner/repo")

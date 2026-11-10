@@ -68,6 +68,12 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
   or cause) is replaced by the verifier's corrected finding; anything it cannot
   disprove (or any verification failure) keeps the finding. Turn it off with
   `verify-findings: false`.
+- **Dedupe against existing feedback:** another fresh session compares the
+  surviving findings with everything already on the PR — inline threads, review
+  summaries and conversation comments, whether from people, other bots or
+  agents, or earlier Answerable runs, resolved or not — and drops any finding
+  that repeats one. When unsure, it keeps the finding. Turn it off with
+  `dedupe-findings: false`.
 - **De-duplicate:** drops findings already tracked by an issue or matching an
   existing review thread, re-flags a bug whose thread was resolved while the
   problem persists, and escalates disputed findings to a GitHub issue instead

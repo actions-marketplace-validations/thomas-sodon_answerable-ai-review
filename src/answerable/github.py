@@ -241,7 +241,7 @@ class GitHubClient:
             "pullRequest(number:$pr){"
             "reviewThreads(first:100){nodes{"
             "id isResolved isOutdated "
-            "comments(first:100){nodes{databaseId path body}}"
+            "comments(first:100){nodes{databaseId path body line originalLine author{login}}}"
             "}}"
             "}}}"
         )

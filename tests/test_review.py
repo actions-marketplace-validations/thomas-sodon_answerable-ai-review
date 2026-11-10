@@ -115,7 +115,11 @@ def _reviewer(host: MagicMock | None = None) -> PRReviewer:
         # Defaults so filtering is a no-op unless a test configures them.
         host.list_issues.return_value = []
         host.get_pr_review_threads.return_value = []
-    return PRReviewer("owner/repo", code_host=host)
+    # Verification and dedupe off: these tests cover the single review call;
+    # the follow-up sessions are covered in test_verification.py / test_dedupe.py.
+    return PRReviewer(
+        "owner/repo", code_host=host, verify_findings=False, dedupe_findings=False,
+    )
 
 
 def _sdk_result(response_data: dict[str, object]) -> QueryResult:
@@ -2008,6 +2012,8 @@ def test_post_review_replies_on_resolved_thread() -> None:
         assert args[0] == 10
         assert args[1] == 555
         assert "defect persists" in args[2].lower()
+    # The thread is unresolved after the reply.
+    host.unresolve_review_thread.assert_called_once_with("PRRT_99")
     # No new review posted (all findings went to reopen)
     host.post_pr_review.assert_not_called()
     assert result.reopened == [bug]

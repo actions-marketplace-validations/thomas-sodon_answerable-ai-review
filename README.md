@@ -61,9 +61,23 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
 - **Review:** sends the diff to Claude with read-only `Read`/`Glob`/`Grep`
   tools in the checked-out repository, so the model can look at surrounding
   code. Each finding has a severity: `bug`, `suggestion` or `nit`.
+- **Verify:** a second, fresh Claude session — sharing none of the reviewer's
+  context — gets the diff and the findings as bare claims and tries to
+  disprove each one with the same read-only tools. Findings it refutes are
+  dropped; a real defect the reviewer described wrongly (wrong line, severity
+  or cause) is replaced by the verifier's corrected finding; anything it cannot
+  disprove (or any verification failure) keeps the finding. Turn it off with
+  `verify-findings: false`.
+- **Dedupe against existing feedback:** another fresh session compares the
+  surviving findings with everything already on the PR — inline threads, review
+  summaries and conversation comments, whether from people, other bots or
+  agents, or earlier Answerable runs, resolved or not — and drops any finding
+  that repeats one. A bug that repeats a *resolved* thread is still broken, so
+  instead of being dropped it reopens that thread (see below). When unsure, it
+  keeps the finding. Turn it off with `dedupe-findings: false`.
 - **De-duplicate:** drops findings already tracked by an issue or matching an
-  existing review thread, re-flags a bug whose thread was resolved while the
-  problem persists, and escalates disputed findings to a GitHub issue instead
+  existing review thread, replies on and unresolves a resolved thread whose
+  bug is still there (whoever opened the thread), and escalates disputed findings to a GitHub issue instead
   of re-posting them.
 - **Post and gate:** posts one review (inline comments, plus an *Additional
   findings* list for findings that cannot be anchored to a diff line) and exits non-zero when anything
@@ -82,7 +96,7 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
   credentials are unset rather than passed as blanks, and `mode: replies`
   needs no Anthropic credential at all.
 - **Least-privilege GitHub token.** The job needs `contents: read`,
-  `pull-requests: write` (to post reviews) and `issues: write` (only for the
+  `pull-requests: write` (to post reviews and reopen threads) and `issues: write` (only for the
   disputed-finding escalation). It uses the workflow's `github.token` by
   default.
 - **Pin what holds your secret.** Because the action receives an Anthropic

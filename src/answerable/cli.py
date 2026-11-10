@@ -4,6 +4,20 @@
 Usage:
     answerable --repo owner/repo --pr 42 [--dry-run]
     answerable --repo owner/repo --pr 42 --require-comment-replies
+    answerable --repo owner/repo --pr 42 --skip-verification
+    answerable --repo owner/repo --pr 42 --skip-dedupe
+
+Findings are adversarially verified before posting: a second agent session,
+fresh and sharing none of the reviewer's context, tries to disprove each one,
+and findings it refutes are dropped. ``--skip-verification`` posts the
+reviewer's findings unverified.
+
+A further fresh session then compares the surviving findings with feedback
+already on the PR — review threads, review summaries, and conversation comments
+from humans, other agents, or earlier runs — and drops any that repeat it. A
+bug that repeats a *resolved* thread is still broken, so that thread gets a
+reply saying the defect persists and is unresolved instead.
+``--skip-dedupe`` turns that pass off.
 
 Exits 1 whenever the reviewer produces a comment — i.e. a finding of any
 severity (bug, suggestion, or nit) is newly posted, or a bug is flagged as
@@ -45,12 +59,18 @@ _DEFAULT_GH_TIMEOUT = 30
 # Reply-coverage gate default (0 = off). Stored as 0/1 alongside the int
 # options; coerced to bool at the argparse default below.
 _DEFAULT_REQUIRE_COMMENT_REPLIES = 0
+# Adversarial verification default (1 = on). Stored as 0/1 like the gate.
+_DEFAULT_VERIFY_FINDINGS = 1
+# Dedupe-against-existing-feedback default (1 = on).
+_DEFAULT_DEDUPE_FINDINGS = 1
 
 _CONFIG_KEYS: dict[str, int] = {
     "max_diff_chars": _DEFAULT_MAX_DIFF_CHARS,
     "max_files": _DEFAULT_MAX_FILES,
     "gh_timeout": _DEFAULT_GH_TIMEOUT,
     "require_comment_replies": _DEFAULT_REQUIRE_COMMENT_REPLIES,
+    "verify_findings": _DEFAULT_VERIFY_FINDINGS,
+    "dedupe_findings": _DEFAULT_DEDUPE_FINDINGS,
 }
 
 # Environment variable naming an explicit config file (searched first).
@@ -142,6 +162,28 @@ def main() -> None:
             "reviewer's own findings (inline or overflow) lack a reply"
         ),
     )
+    parser.add_argument(
+        "--skip-verification",
+        action="store_true",
+        default=not toml_defaults.get(
+            "verify_findings", _DEFAULT_VERIFY_FINDINGS,
+        ),
+        help=(
+            "Post the reviewer's findings without the adversarial "
+            "verification pass that drops findings a fresh session refutes"
+        ),
+    )
+    parser.add_argument(
+        "--skip-dedupe",
+        action="store_true",
+        default=not toml_defaults.get(
+            "dedupe_findings", _DEFAULT_DEDUPE_FINDINGS,
+        ),
+        help=(
+            "Skip the session that drops findings repeating feedback already "
+            "on the PR (from humans, other agents, or earlier reviews)"
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -152,6 +194,8 @@ def main() -> None:
         max_diff_chars=args.max_diff_chars,
         max_files=args.max_files,
         gh_timeout=args.gh_timeout,
+        verify_findings=not args.skip_verification,
+        dedupe_findings=not args.skip_dedupe,
     )
 
     if args.require_comment_replies:
@@ -189,6 +233,24 @@ def main() -> None:
         log.exception("Review failed")
         sys.exit(1)
 
+    if result.refuted or result.revised:
+        log.info(
+            "Adversarial verification dropped %d and revised %d of %d finding(s)",
+            len(result.refuted), len(result.revised),
+            len(result.refuted) + len(result.findings) + len(result.duplicates)
+            + len(result.persisting),
+        )
+    if result.duplicates:
+        log.info(
+            "Dedupe dropped %d finding(s) already raised on the PR",
+            len(result.duplicates),
+        )
+    if result.persisting:
+        log.info(
+            "Dedupe matched %d bug(s) to resolved threads they still affect",
+            len(result.persisting),
+        )
+
     if args.dry_run:
         # Apply the same filtering as the real run so the exit code matches.
         # _filter_tracked_findings removes findings already tracked by open
@@ -196,6 +258,9 @@ def main() -> None:
         # with existing unresolved review threads.  Any finding that survives
         # both filters (i.e. would actually be posted or cause a reopen)
         # triggers exit 1, regardless of severity.
+        # Bugs the dedupe matched to a resolved thread would get a reply and
+        # reopen it, so they count too unless an open issue tracks them.
+        persisting = [p.finding for p in result.persisting]
         try:
             filtered_findings = reviewer._filter_tracked_findings(result.findings)
             if filtered_findings:
@@ -205,21 +270,53 @@ def main() -> None:
                 actioned = new_findings + [f for f, _ in reopen]
             else:
                 actioned = []
+            if persisting:
+                actioned += reviewer._filter_tracked_findings(persisting)
         except Exception:
             log.exception("Dry-run filtering failed; falling back to raw findings")
-            actioned = list(result.findings)
+            actioned = [*result.findings, *persisting]
         has_findings = bool(actioned)
 
         print(f"Summary: {result.summary}")
         print(f"Findings: {len(result.findings)}")
         for f in result.findings:
             print(f"  [{f.severity}] {f.file}:{f.line} — {f.title}")
+        if result.refuted:
+            print(f"Refuted by verification: {len(result.refuted)}")
+            for r in result.refuted:
+                f = r.finding
+                print(f"  [{f.severity}] {f.file}:{f.line} — {f.title}: {r.reason}")
+        if result.revised:
+            print(f"Revised by verification: {len(result.revised)}")
+            for rv in result.revised:
+                o, n = rv.original, rv.revised
+                print(
+                    f"  [{o.severity}] {o.file}:{o.line} — {o.title} → "
+                    f"[{n.severity}] {n.file}:{n.line} — {n.title}: {rv.reason}"
+                )
+        if result.persisting:
+            print(f"Still broken on resolved threads (would reopen): {len(result.persisting)}")
+            for pf in result.persisting:
+                f = pf.finding
+                print(
+                    f"  [{f.severity}] {f.file}:{f.line} — {f.title} "
+                    f"(reopens {pf.existing}): {pf.reason}"
+                )
+        if result.duplicates:
+            print(f"Already raised on the PR: {len(result.duplicates)}")
+            for d in result.duplicates:
+                f = d.finding
+                print(
+                    f"  [{f.severity}] {f.file}:{f.line} — {f.title} "
+                    f"(repeats {d.existing}): {d.reason}"
+                )
         sys.exit(1 if has_findings else 0)
 
     try:
         post_result = reviewer.post_review(
             args.pr, result.findings, result.summary,
             diff=result.diff or None,
+            persisting=result.persisting,
         )
     except Exception:
         log.exception("Failed to post review comment")

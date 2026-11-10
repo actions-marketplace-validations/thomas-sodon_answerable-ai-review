@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'metronome' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:

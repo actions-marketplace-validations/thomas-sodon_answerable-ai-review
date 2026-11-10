@@ -1510,7 +1510,11 @@ class PRReviewer:
 
         The thread is resolved first and the reply posted only once that
         succeeds, so a failed resolve leaves the thread exactly as it was for
-        the next run to retry.  Returns the threads resolved.
+        the next run to retry.  The reply is the only record that the reviewer
+        resolved the thread, which is what stops a later run from resolving it
+        again after someone unresolves it.  So when the reply fails, the thread
+        is unresolved again and left for the next run to retry both steps.
+        Returns the threads resolved.
         """
         if not fixed:
             return []
@@ -1545,20 +1549,34 @@ class PRReviewer:
                 f"was resolved.\n\n{self._clip(entry.reason, _FIX_REASON_CHARS)}"
             )
             try:
-                self._host.reply_to_review_comment(
+                replied = self._host.reply_to_review_comment(
                     pr_number, thread.comment_id, reply_body,
-                )
+                ) is not False
             except Exception:
-                logger.warning(
-                    "Resolved fixed thread for '%s' in %s but could not reply "
-                    "on it", title, thread.path, exc_info=True,
-                )
-            else:
-                thread.reply_bodies.append(reply_body)
-                thread.all_bodies = (
-                    f"{thread.all_bodies}\n{reply_body}" if thread.all_bodies
-                    else reply_body
-                )
+                logger.debug("Reply on fixed thread raised", exc_info=True)
+                replied = False
+            if not replied:
+                # Without the marker reply a later run could not tell that the
+                # reviewer resolved this thread, and would resolve it again
+                # after someone unresolves it.  Undo the resolve instead.
+                if self._host.unresolve_review_thread(thread.thread_id):
+                    logger.warning(
+                        "Could not reply on fixed thread for '%s' in %s; "
+                        "unresolved it again for the next run to retry",
+                        title, thread.path,
+                    )
+                else:
+                    logger.warning(
+                        "Could not reply on fixed thread for '%s' in %s, nor "
+                        "unresolve it; it stays resolved without a reply",
+                        title, thread.path,
+                    )
+                continue
+            thread.reply_bodies.append(reply_body)
+            thread.all_bodies = (
+                f"{thread.all_bodies}\n{reply_body}" if thread.all_bodies
+                else reply_body
+            )
             thread.is_resolved = True
             logger.info("Resolved fixed thread for '%s' in %s", title, thread.path)
             resolved_ids.add(thread.thread_id)

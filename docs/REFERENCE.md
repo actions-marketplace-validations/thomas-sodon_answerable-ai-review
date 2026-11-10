@@ -143,8 +143,9 @@ reviewer's to close:
 
 Threads that a finding from this run matches are never sent, because the
 reviewer just found that defect again. That covers a title match and a dedupe
-match. The session is skipped when there are no candidates, including when
-the review produced no findings at all.
+match. The session also runs when the review produced no findings, which is
+the usual case once every finding has been fixed. It is skipped only when no
+open thread is a candidate.
 
 - **Only a `fixed` verdict with a reason resolves a thread.** `present`,
   `unsure`, a missing verdict, an unparseable response or a failed session
@@ -157,7 +158,8 @@ the review produced no findings at all.
   it is resolved, and once GitHub confirms that, it gets a reply starting
   *"Resolved automatically: this defect is no longer present"* with the
   session's reason. If resolving fails, nothing is posted and the next run
-  tries again.
+  tries again. If the reply fails, the thread is unresolved again, so it is
+  never left resolved without the reply that records why.
 - **Someone can overrule it** by unresolving the thread. The reviewer never
   resolves that thread again, and the reply-coverage gate counts it as
   unanswered until someone replies after the automatic one.

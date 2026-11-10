@@ -42,7 +42,7 @@ class CodeHost(Protocol):
 
     def reply_to_review_comment(
         self, pr_number: int, comment_id: int, body: str,
-    ) -> None: ...
+    ) -> bool | None: ...
 
     def unresolve_review_thread(self, thread_id: str) -> bool: ...
 
@@ -335,9 +335,14 @@ class GitHubClient:
 
     def reply_to_review_comment(
         self, pr_number: int, comment_id: int, body: str,
-    ) -> None:
+    ) -> bool:
+        """Reply to review comment *comment_id* with *body*.
+
+        Best-effort: logs a warning and returns ``False`` on failure (or when
+        no repo is configured), ``True`` once GitHub accepts the reply.
+        """
         if not self._repo:
-            return
+            return False
         try:
             self._run(
                 [
@@ -356,6 +361,8 @@ class GitHubClient:
                 "Failed to reply to review comment %d", comment_id,
                 exc_info=True,
             )
+            return False
+        return True
 
     def unresolve_review_thread(self, thread_id: str) -> bool:
         """Mark the review thread *thread_id* (GraphQL node ID) unresolved.

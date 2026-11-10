@@ -156,6 +156,22 @@ class TestResolveReviewThread:
         run.assert_not_called()
 
 
+class TestReplyToReviewComment:
+    def test_returns_true_when_posted(self) -> None:
+        client = GitHubClient(repo="owner/repo")
+        with patch.object(client, "_run") as run:
+            assert client.reply_to_review_comment(1, 5, "hi") is True
+        run.assert_called_once()
+
+    def test_returns_false_on_gh_failure(self) -> None:
+        client = GitHubClient(repo="owner/repo")
+        with patch.object(client, "_run", side_effect=GitHubError("boom")):
+            assert client.reply_to_review_comment(1, 5, "hi") is False
+
+    def test_returns_false_without_repo(self) -> None:
+        assert GitHubClient().reply_to_review_comment(1, 5, "hi") is False
+
+
 # ------------------------------------------------------------------
 # Which threads may be resolved
 # ------------------------------------------------------------------
@@ -373,15 +389,46 @@ def test_resolve_failure_posts_no_reply(caplog: pytest.LogCaptureFixture) -> Non
     assert "Could not resolve fixed thread" in caplog.text
 
 
-def test_reply_failure_still_counts_as_resolved() -> None:
+@pytest.mark.parametrize("failure", ["returns_false", "raises"])
+def test_reply_failure_unresolves_the_thread_again(
+    failure: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without the marker reply nothing records that the reviewer resolved the
+    thread, so a later run could resolve it again over a person's unresolve.
+    The resolve is undone instead, and the next run retries both steps."""
     node = _node()
     host = _host([node])
-    host.reply_to_review_comment.side_effect = RuntimeError("blip")
+    host.unresolve_review_thread.return_value = True
+    if failure == "raises":
+        host.reply_to_review_comment.side_effect = RuntimeError("blip")
+    else:
+        host.reply_to_review_comment.return_value = False
     reviewer = PRReviewer("owner/repo", code_host=host)
 
-    out = reviewer.post_review(1, [], "s", diff=DIFF, fixed=[_fixed_entry(node)])
+    with caplog.at_level(logging.WARNING):
+        out = reviewer.post_review(1, [], "s", diff=DIFF, fixed=[_fixed_entry(node)])
 
-    assert [t.thread_id for t in out.resolved] == ["PRRT_1"]
+    assert out.resolved == []
+    host.resolve_review_thread.assert_called_once_with("PRRT_1")
+    host.unresolve_review_thread.assert_called_once_with("PRRT_1")
+    assert "unresolved it again" in caplog.text
+    # The thread is back where it was: still a candidate for the next run.
+    (fresh,) = PRReviewer._parse_review_threads(host.get_pr_review_threads(1))
+    assert PRReviewer._is_fix_candidate(fresh)
+
+
+def test_reply_and_unresolve_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    node = _node()
+    host = _host([node])
+    host.reply_to_review_comment.return_value = False
+    host.unresolve_review_thread.return_value = False
+    reviewer = PRReviewer("owner/repo", code_host=host)
+
+    with caplog.at_level(logging.WARNING):
+        out = reviewer.post_review(1, [], "s", diff=DIFF, fixed=[_fixed_entry(node)])
+
+    assert out.resolved == []
+    assert "stays resolved without a reply" in caplog.text
 
 
 @pytest.mark.parametrize("fresh", [

@@ -4,6 +4,12 @@
 Usage:
     answerable --repo owner/repo --pr 42 [--dry-run]
     answerable --repo owner/repo --pr 42 --require-comment-replies
+    answerable --repo owner/repo --pr 42 --skip-verification
+
+Findings are adversarially verified before posting: a second agent session,
+fresh and sharing none of the reviewer's context, tries to disprove each one,
+and findings it refutes are dropped. ``--skip-verification`` posts the
+reviewer's findings unverified.
 
 Exits 1 whenever the reviewer produces a comment — i.e. a finding of any
 severity (bug, suggestion, or nit) is newly posted, or a bug is flagged as
@@ -45,12 +51,15 @@ _DEFAULT_GH_TIMEOUT = 30
 # Reply-coverage gate default (0 = off). Stored as 0/1 alongside the int
 # options; coerced to bool at the argparse default below.
 _DEFAULT_REQUIRE_COMMENT_REPLIES = 0
+# Adversarial verification default (1 = on). Stored as 0/1 like the gate.
+_DEFAULT_VERIFY_FINDINGS = 1
 
 _CONFIG_KEYS: dict[str, int] = {
     "max_diff_chars": _DEFAULT_MAX_DIFF_CHARS,
     "max_files": _DEFAULT_MAX_FILES,
     "gh_timeout": _DEFAULT_GH_TIMEOUT,
     "require_comment_replies": _DEFAULT_REQUIRE_COMMENT_REPLIES,
+    "verify_findings": _DEFAULT_VERIFY_FINDINGS,
 }
 
 # Environment variable naming an explicit config file (searched first).
@@ -142,6 +151,17 @@ def main() -> None:
             "reviewer's own findings (inline or overflow) lack a reply"
         ),
     )
+    parser.add_argument(
+        "--skip-verification",
+        action="store_true",
+        default=not toml_defaults.get(
+            "verify_findings", _DEFAULT_VERIFY_FINDINGS,
+        ),
+        help=(
+            "Post the reviewer's findings without the adversarial "
+            "verification pass that drops findings a fresh session refutes"
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -152,6 +172,7 @@ def main() -> None:
         max_diff_chars=args.max_diff_chars,
         max_files=args.max_files,
         gh_timeout=args.gh_timeout,
+        verify_findings=not args.skip_verification,
     )
 
     if args.require_comment_replies:
@@ -189,6 +210,12 @@ def main() -> None:
         log.exception("Review failed")
         sys.exit(1)
 
+    if result.refuted:
+        log.info(
+            "Adversarial verification dropped %d of %d finding(s)",
+            len(result.refuted), len(result.refuted) + len(result.findings),
+        )
+
     if args.dry_run:
         # Apply the same filtering as the real run so the exit code matches.
         # _filter_tracked_findings removes findings already tracked by open
@@ -214,6 +241,11 @@ def main() -> None:
         print(f"Findings: {len(result.findings)}")
         for f in result.findings:
             print(f"  [{f.severity}] {f.file}:{f.line} — {f.title}")
+        if result.refuted:
+            print(f"Refuted by verification: {len(result.refuted)}")
+            for r in result.refuted:
+                f = r.finding
+                print(f"  [{f.severity}] {f.file}:{f.line} — {f.title}: {r.reason}")
         sys.exit(1 if has_findings else 0)
 
     try:

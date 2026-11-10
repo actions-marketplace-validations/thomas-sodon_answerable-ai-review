@@ -27,6 +27,7 @@ answerable --repo owner/repo --pr 42                     # review and post
 answerable --repo owner/repo --pr 42 --dry-run           # print findings, post nothing
 answerable --repo owner/repo --pr 42 --max-diff-chars 100000 --max-files 75
 answerable --repo owner/repo --pr 42 --require-comment-replies   # reply-coverage audit only
+answerable --repo owner/repo --pr 42 --skip-verification         # post findings unverified
 ```
 
 | Option | Default | Meaning |
@@ -38,9 +39,28 @@ answerable --repo owner/repo --pr 42 --require-comment-replies   # reply-coverag
 | `--gh-timeout` | `30` | Timeout in seconds for each `gh` call |
 | `--dry-run` | off | Print the summary and findings to stdout instead of posting |
 | `--require-comment-replies` | off | Check-only mode: skip the review, audit reply coverage |
+| `--skip-verification` | off | Skip the adversarial verification pass and post the reviewer's findings as-is |
 
 `--require-comment-replies` takes precedence: when it is set, `--dry-run` has
 no effect and no diff review is run.
+
+## Adversarial verification
+
+After the review returns findings, a second `query()` call — a fresh agent
+session that shares none of the reviewer's context — receives the PR title and
+description, the same truncated diff, and each finding's site, severity, title
+and description (not the reviewer's summary, fix plan or suggested code). It
+tries to disprove each finding with the same read-only tools, model and effort,
+and answers `confirmed` or `refuted` per finding.
+
+- Only an explicit `refuted` verdict drops a finding. A missing verdict, an
+  unparseable response, or a failed verification query keeps every finding;
+  verification never fails the run.
+- Refuted findings are not posted. They are logged with the verifier's reason,
+  and `--dry-run` prints them under *Refuted by verification*.
+- The pass is skipped when the review produced no findings, and roughly doubles
+  model cost otherwise. Disable it with `--skip-verification`,
+  `verify_findings = 0`, or the `verify-findings: false` action input.
 
 ## Exit codes
 
@@ -65,7 +85,7 @@ A finding counts as **answered** when:
 ## Configuration
 
 Command-line options always win. Defaults for `max_diff_chars`, `max_files`,
-`gh_timeout` and `require_comment_replies` can also come from a config file
+`gh_timeout`, `require_comment_replies` and `verify_findings` can also come from a config file
 and/or environment variables.
 
 **Config file.** The first of these files that exists and has a non-empty
@@ -80,6 +100,7 @@ max_diff_chars = 80000
 max_files = 50
 gh_timeout = 30
 require_comment_replies = 0   # 1 = run in reply-coverage audit mode by default
+verify_findings = 1           # 0 = skip adversarial verification of findings
 ```
 
 A file that fails to parse is ignored; a value that is not an integer falls
@@ -87,7 +108,8 @@ back to its default.
 
 **Environment variables** override the config file:
 `ANSWERABLE_MAX_DIFF_CHARS`, `ANSWERABLE_MAX_FILES`,
-`ANSWERABLE_GH_TIMEOUT`, `ANSWERABLE_REQUIRE_COMMENT_REPLIES`
+`ANSWERABLE_GH_TIMEOUT`, `ANSWERABLE_REQUIRE_COMMENT_REPLIES`,
+`ANSWERABLE_VERIFY_FINDINGS`
 (integers; blank or non-integer values are ignored).
 
 The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
@@ -104,6 +126,7 @@ The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
 | `pr-number` | triggering PR | Pull request number |
 | `mode` | `review` | `review` or `replies` (`--require-comment-replies`; needs no Claude credential) |
 | `dry-run` | `false` | `true` prints findings instead of posting |
+| `verify-findings` | `true` | `false` skips the [adversarial verification](#adversarial-verification) pass |
 | `max-diff-chars`, `max-files`, `gh-timeout` | tool defaults | Passed through to the CLI |
 | `python-version` | `3.14` | Python used to run the reviewer |
 

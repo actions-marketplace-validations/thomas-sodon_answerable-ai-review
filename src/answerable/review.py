@@ -14,7 +14,7 @@ from answerable.markers import (
     _ALL_COMMENT_TERMINAL_MARKERS,
     _DISAGREEMENT_MARKER,
 )
-from answerable.prompt import CODE_REVIEW_PROMPT
+from answerable.prompt import CODE_REVIEW_PROMPT, VERIFY_FINDINGS_PROMPT
 from answerable.sdk import REVIEW_EFFORT, REVIEW_MODEL, QueryOptions, query
 
 if TYPE_CHECKING:
@@ -382,14 +382,28 @@ class ReviewFinding:
 
 
 @dataclass
+class RefutedFinding:
+    """A finding the adversarial verifier disproved, with its reason."""
+
+    finding: ReviewFinding
+    reason: str
+
+
+@dataclass
 class ReviewResult:
-    """Complete review output."""
+    """Complete review output.
+
+    ``findings`` are the findings that survived adversarial verification (or
+    every finding, when verification is off or could not run); ``refuted``
+    holds the ones the verifier disproved, which are never posted.
+    """
 
     findings: list[ReviewFinding] = field(default_factory=list)
     summary: str = ""
     tokens_used: int = 0
     cost_usd: float | None = None
     diff: str = ""
+    refuted: list[RefutedFinding] = field(default_factory=list)
 
 
 @dataclass
@@ -432,6 +446,20 @@ class UnrepliedComments:
     overflow: list[OverflowFinding] = field(default_factory=list)
 
 
+def _review_query_options() -> QueryOptions:
+    """Options shared by the review and verification queries.
+
+    Read-only tools only.  No resume/continue option exists on
+    :class:`QueryOptions`, so every :func:`query` made with these options
+    starts a fresh session.
+    """
+    return QueryOptions(
+        allowed_tools=["Read", "Glob", "Grep"],
+        model=REVIEW_MODEL,
+        effort=REVIEW_EFFORT,
+    )
+
+
 def _safe_int(value: object, default: int = 0) -> int:
     """Convert *value* to ``int``, returning *default* on failure."""
     try:
@@ -451,8 +479,10 @@ class PRReviewer:
         max_diff_chars: int = 80_000,
         max_files: int = 50,
         code_host: CodeHost | None = None,
+        verify_findings: bool = True,
     ) -> None:
         self._repo = github_repo
+        self._verify_findings = verify_findings
         self._max_diff_chars = max_diff_chars
         self._max_files = max_files
         self._host = code_host or GitHubClient(
@@ -806,14 +836,7 @@ class PRReviewer:
             diff=truncated_diff,
         )
 
-        sdk_result = await query(
-            prompt=prompt,
-            options=QueryOptions(
-                allowed_tools=["Read", "Glob", "Grep"],
-                model=REVIEW_MODEL,
-                effort=REVIEW_EFFORT,
-            ),
-        )
+        sdk_result = await query(prompt=prompt, options=_review_query_options())
 
         # Parse structured response
         try:
@@ -865,13 +888,143 @@ class PRReviewer:
                 suggested_code=item.get("suggested_code"),
             ))
 
-        return ReviewResult(
+        result = ReviewResult(
             findings=findings,
             summary=data.get("summary", ""),
             tokens_used=sdk_result.usage.total_tokens,
             cost_usd=sdk_result.usage.total_cost_usd,
             diff=diff,
         )
+        if self._verify_findings and findings:
+            await self._verify(result, info, truncated_diff)
+        return result
+
+    # ------------------------------------------------------------------
+    # Adversarial verification (fresh session)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_findings_for_verification(findings: list[ReviewFinding]) -> str:
+        """Render *findings* as numbered claims for the verifier prompt.
+
+        Carries only what the finding asserts — site, severity, title,
+        description — not the reviewer's summary, fix plan, or suggested code,
+        so the verifier judges the claim against the code rather than being
+        anchored on the reviewer's argument for it.
+        """
+        blocks: list[str] = []
+        for idx, finding in enumerate(findings):
+            blocks.append(
+                f"### Finding {idx}\n"
+                f"- File: {finding.file}\n"
+                f"- Line: {finding.line}\n"
+                f"- Severity: {finding.severity}\n"
+                f"- Title: {finding.title}\n"
+                f"- Description: {finding.description}"
+            )
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _parse_verdicts(data: Any) -> dict[int, tuple[str, str]]:
+        """Map finding id → ``(verdict, reason)`` from the verifier's JSON.
+
+        Entries that are not dicts, carry a non-integer id, or name a verdict
+        other than ``confirmed``/``refuted`` are skipped; the first verdict for
+        an id wins.
+        """
+        if isinstance(data, dict):
+            items = data.get("verdicts") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        verdicts: dict[int, tuple[str, str]] = {}
+        if not isinstance(items, list):
+            return verdicts
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("id")
+            if isinstance(raw_id, bool):
+                continue
+            try:
+                idx = int(raw_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if verdict not in ("confirmed", "refuted"):
+                continue
+            verdicts.setdefault(idx, (verdict, str(item.get("reason") or "").strip()))
+        return verdicts
+
+    async def _verify(
+        self,
+        result: ReviewResult,
+        info: dict[str, str],
+        truncated_diff: str,
+    ) -> None:
+        """Adversarially verify ``result.findings`` in a fresh agent session.
+
+        A separate :func:`query` call starts a new session, so the verifier
+        shares none of the reviewer's context: it sees the PR, the same
+        truncated diff, and the findings as bare claims, and tries to disprove
+        each one with the same read-only tools.  Findings it refutes move from
+        ``result.findings`` to ``result.refuted``; usage is added to the
+        result's totals.
+
+        Fails open: only an explicit ``refuted`` verdict drops a finding.  A
+        failed query, an unparseable response, or a missing verdict keeps the
+        finding, so verification can only ever reduce false positives — never
+        turn a review into an infrastructure failure or silently lose a real
+        defect.
+        """
+        findings = result.findings
+        prompt = VERIFY_FINDINGS_PROMPT.format(
+            pr_title=info["title"],
+            pr_body=info["body"] or "(no description)",
+            diff=truncated_diff,
+            findings=self._format_findings_for_verification(findings),
+        )
+        try:
+            sdk_result = await query(prompt=prompt, options=_review_query_options())
+        except Exception:
+            logger.warning(
+                "Adversarial verification failed; keeping all %d finding(s)",
+                len(findings), exc_info=True,
+            )
+            return
+
+        result.tokens_used += sdk_result.usage.total_tokens
+        if sdk_result.usage.total_cost_usd is not None:
+            result.cost_usd = (result.cost_usd or 0.0) + sdk_result.usage.total_cost_usd
+
+        try:
+            verdicts = self._parse_verdicts(sdk_result.parse_json())
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "Failed to parse verification JSON; keeping all %d finding(s)",
+                len(findings),
+            )
+            return
+
+        kept: list[ReviewFinding] = []
+        for idx, finding in enumerate(findings):
+            verdict, reason = verdicts.get(idx, ("", ""))
+            if verdict == "refuted":
+                logger.info(
+                    "Verifier refuted %s '%s' in %s:%d — %s",
+                    finding.severity, finding.title, finding.file,
+                    finding.line, reason or "(no reason given)",
+                )
+                result.refuted.append(RefutedFinding(finding=finding, reason=reason))
+                continue
+            if not verdict:
+                logger.warning(
+                    "Verifier returned no verdict for '%s' in %s; keeping it",
+                    finding.title, finding.file,
+                )
+            kept.append(finding)
+        result.findings = kept
 
     # ------------------------------------------------------------------
     # Review posting

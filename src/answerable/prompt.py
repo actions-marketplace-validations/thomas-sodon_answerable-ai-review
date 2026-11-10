@@ -85,24 +85,43 @@ Description: {pr_body}
 ## Instructions
 For each finding, decide one verdict:
 
-- ``refuted`` — you can show concretely that the finding is wrong: the code
+- ``refuted`` — you can show concretely that there is no defect: the code
   does not behave as claimed, an existing guard or caller rules the input out,
-  the cited line is not what the finding describes, or the "defect" is a style
-  preference, scoping advice, or speculative improvement rather than broken
-  behaviour. Cite the specific code that refutes it.
-- ``confirmed`` — you tried to disprove it and could not; the defect is real
-  or plausibly real.
+  or the "defect" is a style preference, scoping advice, or speculative
+  improvement rather than broken behaviour. Cite the specific code that
+  refutes it.
+- ``revised`` — there is a real defect, but the finding gets it wrong: it
+  cites the wrong line or file, overstates or understates the severity,
+  misidentifies the cause, or describes the consequence inaccurately. Supply
+  the corrected finding in ``revised``. Include only the fields you are
+  changing; omitted fields keep the original. If the location or cause
+  changes, include a ``fix_plan`` (and ``suggested_code`` when the fix is a
+  single-line replacement) that matches the corrected finding.
+- ``confirmed`` — you tried to disprove it and could not, and it is accurate
+  as written; the defect is real or plausibly real.
 
 Refute only with evidence. A finding you merely find unconvincing, but cannot
-disprove, is ``confirmed``. Give exactly one verdict per finding id.
+disprove, is ``confirmed``. Prefer ``revised`` over ``refuted`` when the
+underlying defect is real. Do not use ``revised`` to report a different,
+unrelated defect. Give exactly one verdict per finding id. ``line`` is the line
+number in the new version of the file (the right side of the diff).
 
 Respond with JSON only — no surrounding text:
 {{
   "verdicts": [
     {{
       "id": 0,
-      "verdict": "confirmed | refuted",
-      "reason": "One or two sentences citing the code that supports the verdict"
+      "verdict": "confirmed | refuted | revised",
+      "reason": "One or two sentences citing the code that supports the verdict",
+      "revised": {{
+        "file": "path/to/file.py",
+        "line": 42,
+        "severity": "bug | suggestion | nit",
+        "title": "Corrected short title",
+        "description": "Corrected description",
+        "fix_plan": "Fix matching the corrected finding",
+        "suggested_code": "optional — replacement code for the line"
+      }}
     }}
   ]
 }}\

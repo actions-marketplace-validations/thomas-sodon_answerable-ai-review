@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from answerable.review import PRReviewer, RefutedFinding
+from answerable.review import PRReviewer, RefutedFinding, ReviewFinding, RevisedFinding
 from answerable.sdk import QueryResult, QueryUsage
 
 DIFF = """\
@@ -84,6 +84,7 @@ async def test_verifier_runs_as_a_separate_fresh_query() -> None:
     verify_prompt = verify_call.kwargs["prompt"]
     assert verify_prompt != review_call.kwargs["prompt"]
     assert "adversarial verifier" in verify_prompt
+    assert "``revised``" in verify_prompt
     assert "### Finding 0" in verify_prompt and "### Finding 1" in verify_prompt
     assert "Division by zero" in verify_prompt
     assert DIFF in verify_prompt
@@ -184,3 +185,122 @@ async def test_verification_disabled_makes_one_call() -> None:
     assert mock_query.await_count == 1
     assert len(result.findings) == 2
     assert result.refuted == []
+
+
+# ------------------------------------------------------------------
+# Revised findings
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revised_finding_replaces_original_in_place() -> None:
+    verdicts = _result({"verdicts": [
+        {"id": 0, "verdict": "revised", "reason": "only on the zero path",
+         "revised": {"line": 3, "severity": "suggestion",
+                     "title": "Division by zero when x is 0",
+                     "fix_plan": "guard x", "suggested_code": "y = x / 1"}},
+        {"id": 1, "verdict": "confirmed"},
+    ]})
+    result, _ = await _run(_review_result(), verdicts)
+
+    assert [f.title for f in result.findings] == [
+        "Division by zero when x is 0", "Unused z",
+    ]
+    new = result.findings[0]
+    assert (new.file, new.line, new.severity) == ("app/a.py", 3, "suggestion")
+    assert new.description == "y divides by zero"  # omitted → original kept
+    assert new.fix_plan == "guard x"
+    assert new.suggested_code == "y = x / 1"
+
+    assert len(result.revised) == 1
+    rv = result.revised[0]
+    assert isinstance(rv, RevisedFinding)
+    assert rv.original.title == "Division by zero"
+    assert rv.original.line == 2
+    assert rv.revised is new
+    assert rv.reason == "only on the zero path"
+    assert result.refuted == []
+
+
+@pytest.mark.asyncio
+async def test_revision_never_carries_over_original_suggested_code() -> None:
+    """The verifier never saw the original suggested_code, so it may no longer
+    match the corrected finding — drop it unless the revision supplies one."""
+    verdicts = _result({"verdicts": [
+        {"id": 0, "verdict": "revised", "revised": {"description": "sharper"}},
+    ]})
+    result, _ = await _run(_review_result(), verdicts)
+
+    new = result.findings[0]
+    assert new.description == "sharper"
+    assert new.suggested_code is None
+    assert new.fix_plan == "SECRET-FIX-PLAN"  # falls back to the original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", [
+    None,
+    "not a dict",
+    {},
+    {"title": "Division by zero", "line": 2},  # no actual change
+    {"title": "   ", "file": "", "severity": None},  # blanks only
+])
+async def test_unusable_revision_keeps_original(
+    revision: object, caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry: dict[str, object] = {"id": 0, "verdict": "revised"}
+    if revision is not None:
+        entry["revised"] = revision
+    with caplog.at_level(logging.WARNING, logger="answerable"):
+        result, _ = await _run(_review_result(), _result({"verdicts": [entry]}))
+
+    original = result.findings[0]
+    assert original.title == "Division by zero"
+    assert original.suggested_code == "y = x"  # untouched original
+    assert result.revised == []
+    assert "without a usable revision" in caplog.text
+
+
+def _finding() -> ReviewFinding:
+    return ReviewFinding(
+        file="a.py", line=5, severity="bug", title="T",
+        description="D", fix_plan="F", suggested_code="code",
+    )
+
+
+@pytest.mark.parametrize(("revision", "field", "expected"), [
+    ({"line": -3, "title": "T2"}, "line", 5),
+    ({"line": "N/A", "title": "T2"}, "line", 5),
+    ({"line": True, "title": "T2"}, "line", 5),
+    ({"line": "7"}, "line", 7),
+    ({"line": 0}, "line", 0),
+    ({"severity": "BOGUS", "title": "T2"}, "severity", "bug"),
+    ({"severity": " Nit "}, "severity", "nit"),
+    ({"file": "  b.py  "}, "file", "b.py"),
+    ({"file": 42, "title": "T2"}, "file", "a.py"),
+])
+def test_apply_revision_normalises_fields(
+    revision: dict[str, object], field: str, expected: object,
+) -> None:
+    revised = PRReviewer._apply_revision(_finding(), revision)
+    assert revised is not None
+    assert getattr(revised, field) == expected
+
+
+@pytest.mark.asyncio
+async def test_mixed_verdicts_preserve_order() -> None:
+    findings = [*FINDINGS, {
+        "file": "app/a.py", "line": 1, "severity": "nit", "title": "Third",
+        "description": "d", "fix_plan": "f",
+    }]
+    review = _result({"summary": "s", "findings": findings})
+    verdicts = _result({"verdicts": [
+        {"id": 0, "verdict": "refuted", "reason": "no"},
+        {"id": 1, "verdict": "revised", "revised": {"title": "Unused z (revised)"}},
+        {"id": 2, "verdict": "confirmed"},
+    ]})
+    result, _ = await _run(review, verdicts)
+
+    assert [f.title for f in result.findings] == ["Unused z (revised)", "Third"]
+    assert [r.finding.title for r in result.refuted] == ["Division by zero"]
+    assert [r.original.title for r in result.revised] == ["Unused z"]

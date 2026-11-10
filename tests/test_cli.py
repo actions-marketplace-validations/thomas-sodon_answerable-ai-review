@@ -31,6 +31,7 @@ class FakeResult:
     findings: list[object]
     diff: str | None = None
     refuted: list[object] = field(default_factory=list)
+    revised: list[object] = field(default_factory=list)
 
 
 @dataclass
@@ -807,3 +808,36 @@ class TestAdversarialVerificationFlag:
         out = capsys.readouterr().out
         assert "Refuted by verification: 1" in out
         assert "a.py:3 — Bogus null deref: guarded on line 2" in out
+
+    def test_dry_run_prints_revised_findings(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from answerable.review import ReviewFinding, RevisedFinding
+
+        original = ReviewFinding(
+            file="a.py", line=3, severity="bug", title="Leak",
+            description="d", fix_plan="f",
+        )
+        revised = ReviewFinding(
+            file="a.py", line=9, severity="suggestion", title="Leak on error path",
+            description="d2", fix_plan="f2",
+        )
+        result = FakeResult(
+            summary="s", findings=[revised],
+            revised=[RevisedFinding(original=original, revised=revised, reason="only on error")],
+        )
+        with (
+            patch.object(sys, "argv", [*BASE_ARGV, "--dry-run"]),
+            patch("answerable.cli.PRReviewer") as mock_cls,
+            patch("answerable.cli.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.run.return_value = result
+            mock_cls.return_value._filter_tracked_findings.return_value = []
+            with pytest.raises(SystemExit):
+                review_pr_mod.main()
+
+        out = capsys.readouterr().out
+        assert "Revised by verification: 1" in out
+        assert (
+            "[bug] a.py:3 — Leak → [suggestion] a.py:9 — Leak on error path: only on error"
+        ) in out

@@ -390,12 +390,23 @@ class RefutedFinding:
 
 
 @dataclass
+class RevisedFinding:
+    """A finding the adversarial verifier corrected: *revised* replaced *original*."""
+
+    original: ReviewFinding
+    revised: ReviewFinding
+    reason: str
+
+
+@dataclass
 class ReviewResult:
     """Complete review output.
 
     ``findings`` are the findings that survived adversarial verification (or
-    every finding, when verification is off or could not run); ``refuted``
-    holds the ones the verifier disproved, which are never posted.
+    every finding, when verification is off or could not run), with any
+    verifier corrections already applied; ``refuted`` holds the ones the
+    verifier disproved, which are never posted; ``revised`` records each
+    correction, whose ``revised`` finding is the one in ``findings``.
     """
 
     findings: list[ReviewFinding] = field(default_factory=list)
@@ -404,6 +415,7 @@ class ReviewResult:
     cost_usd: float | None = None
     diff: str = ""
     refuted: list[RefutedFinding] = field(default_factory=list)
+    revised: list[RevisedFinding] = field(default_factory=list)
 
 
 @dataclass
@@ -444,6 +456,15 @@ class UnrepliedComments:
 
     inline: list[ReviewThread] = field(default_factory=list)
     overflow: list[OverflowFinding] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Verdict:
+    """One parsed verifier verdict for a finding."""
+
+    verdict: str  # "confirmed", "refuted", or "revised"
+    reason: str
+    revision: dict[str, Any] | None = None
 
 
 def _review_query_options() -> QueryOptions:
@@ -925,12 +946,12 @@ class PRReviewer:
         return "\n\n".join(blocks)
 
     @staticmethod
-    def _parse_verdicts(data: Any) -> dict[int, tuple[str, str]]:
-        """Map finding id → ``(verdict, reason)`` from the verifier's JSON.
+    def _parse_verdicts(data: Any) -> dict[int, _Verdict]:
+        """Map finding id → :class:`_Verdict` from the verifier's JSON.
 
         Entries that are not dicts, carry a non-integer id, or name a verdict
-        other than ``confirmed``/``refuted`` are skipped; the first verdict for
-        an id wins.
+        other than ``confirmed``/``refuted``/``revised`` are skipped; the first
+        verdict for an id wins.
         """
         if isinstance(data, dict):
             items = data.get("verdicts") or []
@@ -938,7 +959,7 @@ class PRReviewer:
             items = data
         else:
             items = []
-        verdicts: dict[int, tuple[str, str]] = {}
+        verdicts: dict[int, _Verdict] = {}
         if not isinstance(items, list):
             return verdicts
         for item in items:
@@ -952,10 +973,80 @@ class PRReviewer:
             except (TypeError, ValueError):
                 continue
             verdict = str(item.get("verdict") or "").strip().lower()
-            if verdict not in ("confirmed", "refuted"):
+            if verdict not in ("confirmed", "refuted", "revised"):
                 continue
-            verdicts.setdefault(idx, (verdict, str(item.get("reason") or "").strip()))
+            revision = item.get("revised")
+            verdicts.setdefault(idx, _Verdict(
+                verdict=verdict,
+                reason=str(item.get("reason") or "").strip(),
+                revision=revision if isinstance(revision, dict) else None,
+            ))
         return verdicts
+
+    @staticmethod
+    def _apply_revision(
+        finding: ReviewFinding,
+        revision: dict[str, Any] | None,
+    ) -> ReviewFinding | None:
+        """Return *finding* with the verifier's *revision* applied, or ``None``.
+
+        Omitted, null, or blank fields keep the original value; the same
+        normalisation as the review parse applies (``line`` an int ``>= 0``,
+        ``severity`` one of ``bug``/``suggestion``/``nit``), and an invalid
+        value keeps the original rather than corrupting the finding.
+
+        ``suggested_code`` is never carried over: the verifier never saw the
+        original (it is withheld to avoid anchoring), so after a correction it
+        may target the wrong line or the wrong fix.  The revision's own
+        ``suggested_code`` is used when given; otherwise the revised finding
+        posts its ``fix_plan`` instead.
+
+        Returns ``None`` when *revision* is missing or changes nothing, so the
+        caller keeps the original as if it were confirmed.
+        """
+        if not revision:
+            return None
+
+        def text(key: str, default: str) -> str:
+            value = revision.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+            return default
+
+        line = finding.line
+        raw_line = revision.get("line")
+        if raw_line is not None and not isinstance(raw_line, bool):
+            try:
+                candidate = int(raw_line)
+            except (TypeError, ValueError):
+                candidate = -1
+            if candidate >= 0:
+                line = candidate
+
+        severity = text("severity", finding.severity).strip().lower()
+        if severity not in ("bug", "suggestion", "nit"):
+            severity = finding.severity
+
+        raw_code = revision.get("suggested_code")
+        suggested_code = raw_code if isinstance(raw_code, str) and raw_code.strip() else None
+
+        revised = ReviewFinding(
+            file=text("file", finding.file).strip(),
+            line=line,
+            severity=severity,
+            title=text("title", finding.title),
+            description=text("description", finding.description),
+            fix_plan=text("fix_plan", finding.fix_plan),
+            suggested_code=suggested_code,
+        )
+        unchanged = ReviewFinding(
+            file=finding.file, line=finding.line, severity=finding.severity,
+            title=finding.title, description=finding.description,
+            fix_plan=finding.fix_plan, suggested_code=None,
+        )
+        if revised == unchanged:
+            return None
+        return revised
 
     async def _verify(
         self,
@@ -968,15 +1059,21 @@ class PRReviewer:
         A separate :func:`query` call starts a new session, so the verifier
         shares none of the reviewer's context: it sees the PR, the same
         truncated diff, and the findings as bare claims, and tries to disprove
-        each one with the same read-only tools.  Findings it refutes move from
-        ``result.findings`` to ``result.refuted``; usage is added to the
-        result's totals.
+        each one with the same read-only tools.  Per finding it answers:
+
+        * ``confirmed`` — kept as-is.
+        * ``refuted`` — moved from ``result.findings`` to ``result.refuted``.
+        * ``revised`` — replaced in place by the verifier's corrected finding
+          (see :meth:`_apply_revision`) and recorded in ``result.revised``.
+
+        Usage is added to the result's totals.
 
         Fails open: only an explicit ``refuted`` verdict drops a finding.  A
-        failed query, an unparseable response, or a missing verdict keeps the
-        finding, so verification can only ever reduce false positives — never
-        turn a review into an infrastructure failure or silently lose a real
-        defect.
+        failed query, an unparseable response, a missing verdict, or a
+        ``revised`` verdict whose revision is missing or changes nothing keeps
+        the original finding, so verification can only ever reduce false
+        positives or sharpen a finding — never turn a review into an
+        infrastructure failure or silently lose a real defect.
         """
         findings = result.findings
         prompt = VERIFY_FINDINGS_PROMPT.format(
@@ -1009,20 +1106,46 @@ class PRReviewer:
 
         kept: list[ReviewFinding] = []
         for idx, finding in enumerate(findings):
-            verdict, reason = verdicts.get(idx, ("", ""))
-            if verdict == "refuted":
-                logger.info(
-                    "Verifier refuted %s '%s' in %s:%d — %s",
-                    finding.severity, finding.title, finding.file,
-                    finding.line, reason or "(no reason given)",
-                )
-                result.refuted.append(RefutedFinding(finding=finding, reason=reason))
-                continue
-            if not verdict:
+            verdict = verdicts.get(idx)
+            if verdict is None:
                 logger.warning(
                     "Verifier returned no verdict for '%s' in %s; keeping it",
                     finding.title, finding.file,
                 )
+                kept.append(finding)
+                continue
+            reason = verdict.reason or "(no reason given)"
+            if verdict.verdict == "refuted":
+                logger.info(
+                    "Verifier refuted %s '%s' in %s:%d — %s",
+                    finding.severity, finding.title, finding.file,
+                    finding.line, reason,
+                )
+                result.refuted.append(
+                    RefutedFinding(finding=finding, reason=verdict.reason),
+                )
+                continue
+            if verdict.verdict == "revised":
+                revised = self._apply_revision(finding, verdict.revision)
+                if revised is None:
+                    logger.warning(
+                        "Verifier marked '%s' in %s revised without a usable "
+                        "revision; keeping the original",
+                        finding.title, finding.file,
+                    )
+                    kept.append(finding)
+                    continue
+                logger.info(
+                    "Verifier revised %s '%s' in %s:%d → %s '%s' in %s:%d — %s",
+                    finding.severity, finding.title, finding.file, finding.line,
+                    revised.severity, revised.title, revised.file, revised.line,
+                    reason,
+                )
+                result.revised.append(RevisedFinding(
+                    original=finding, revised=revised, reason=verdict.reason,
+                ))
+                kept.append(revised)
+                continue
             kept.append(finding)
         result.findings = kept
 

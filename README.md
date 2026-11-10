@@ -64,8 +64,10 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
 - **Verify:** a second, fresh Claude session — sharing none of the reviewer's
   context — gets the diff and the findings as bare claims and tries to
   disprove each one with the same read-only tools. Findings it refutes are
-  dropped; anything it cannot disprove (or any verification failure) keeps the
-  finding. Turn it off with `verify-findings: false`.
+  dropped; a real defect the reviewer described wrongly (wrong line, severity
+  or cause) is replaced by the verifier's corrected finding; anything it cannot
+  disprove (or any verification failure) keeps the finding. Turn it off with
+  `verify-findings: false`.
 - **De-duplicate:** drops findings already tracked by an issue or matching an
   existing review thread, re-flags a bug whose thread was resolved while the
   problem persists, and escalates disputed findings to a GitHub issue instead

@@ -51,13 +51,26 @@ session that shares none of the reviewer's context — receives the PR title and
 description, the same truncated diff, and each finding's site, severity, title
 and description (not the reviewer's summary, fix plan or suggested code). It
 tries to disprove each finding with the same read-only tools, model and effort,
-and answers `confirmed` or `refuted` per finding.
+and answers one verdict per finding:
+
+| Verdict | Effect |
+|---|---|
+| `confirmed` | Posted as the reviewer wrote it |
+| `refuted` | No defect exists; dropped and never posted |
+| `revised` | A real defect the reviewer got wrong (line, file, severity, cause or description); the verifier's corrected finding is posted in its place |
 
 - Only an explicit `refuted` verdict drops a finding. A missing verdict, an
   unparseable response, or a failed verification query keeps every finding;
   verification never fails the run.
-- Refuted findings are not posted. They are logged with the verifier's reason,
-  and `--dry-run` prints them under *Refuted by verification*.
+- A revision lists only the fields it changes; the rest keep the reviewer's
+  values, and invalid values (a negative line, an unknown severity, a blank
+  file) are ignored. The original `suggested_code` is never carried over,
+  because the verifier never saw it and it may no longer fit: the revision's
+  own `suggested_code` is used when given, otherwise the `fix_plan` is posted.
+  A `revised` verdict with no usable change keeps the original finding.
+- Refuted and revised findings are logged with the verifier's reason, and
+  `--dry-run` prints them under *Refuted by verification* and *Revised by
+  verification*.
 - The pass is skipped when the review produced no findings, and roughly doubles
   model cost otherwise. Disable it with `--skip-verification`,
   `verify_findings = 0`, or the `verify-findings: false` action input.

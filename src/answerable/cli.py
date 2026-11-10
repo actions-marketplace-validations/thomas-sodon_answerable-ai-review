@@ -210,10 +210,11 @@ def main() -> None:
         log.exception("Review failed")
         sys.exit(1)
 
-    if result.refuted:
+    if result.refuted or result.revised:
         log.info(
-            "Adversarial verification dropped %d of %d finding(s)",
-            len(result.refuted), len(result.refuted) + len(result.findings),
+            "Adversarial verification dropped %d and revised %d of %d finding(s)",
+            len(result.refuted), len(result.revised),
+            len(result.refuted) + len(result.findings),
         )
 
     if args.dry_run:
@@ -246,6 +247,14 @@ def main() -> None:
             for r in result.refuted:
                 f = r.finding
                 print(f"  [{f.severity}] {f.file}:{f.line} — {f.title}: {r.reason}")
+        if result.revised:
+            print(f"Revised by verification: {len(result.revised)}")
+            for rv in result.revised:
+                o, n = rv.original, rv.revised
+                print(
+                    f"  [{o.severity}] {o.file}:{o.line} — {o.title} → "
+                    f"[{n.severity}] {n.file}:{n.line} — {n.title}: {rv.reason}"
+                )
         sys.exit(1 if has_findings else 0)
 
     try:

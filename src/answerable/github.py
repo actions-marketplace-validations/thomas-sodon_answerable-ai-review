@@ -44,6 +44,8 @@ class CodeHost(Protocol):
         self, pr_number: int, comment_id: int, body: str,
     ) -> None: ...
 
+    def unresolve_review_thread(self, thread_id: str) -> bool: ...
+
     def list_issues(
         self,
         *,
@@ -241,7 +243,7 @@ class GitHubClient:
             "pullRequest(number:$pr){"
             "reviewThreads(first:100){nodes{"
             "id isResolved isOutdated "
-            "comments(first:100){nodes{databaseId path body}}"
+            "comments(first:100){nodes{databaseId path body line originalLine author{login}}}"
             "}}"
             "}}}"
         )
@@ -352,6 +354,39 @@ class GitHubClient:
                 "Failed to reply to review comment %d", comment_id,
                 exc_info=True,
             )
+
+    def unresolve_review_thread(self, thread_id: str) -> bool:
+        """Mark the review thread *thread_id* (GraphQL node ID) unresolved.
+
+        Best-effort, like :meth:`reply_to_review_comment`: logs a warning and
+        returns ``False`` on failure, ``True`` once GitHub accepts it.
+        """
+        if not thread_id:
+            return False
+        mutation = (
+            "mutation($threadId:ID!){"
+            "unresolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}"
+            "}"
+        )
+        try:
+            result = self._run([
+                "gh", "api", "graphql",
+                "-f", f"query={mutation}",
+                "-f", f"threadId={thread_id}",
+            ])
+            data = json.loads(result.stdout or "{}")
+            if not isinstance(data, dict) or data.get("errors") or data.get("data") is None:
+                logger.warning(
+                    "GraphQL refused to unresolve review thread %s: %.500s",
+                    thread_id, result.stdout,
+                )
+                return False
+            return True
+        except (GitHubError, json.JSONDecodeError, AttributeError, TypeError):
+            logger.warning(
+                "Failed to unresolve review thread %s", thread_id, exc_info=True,
+            )
+            return False
 
     def list_issues(
         self,

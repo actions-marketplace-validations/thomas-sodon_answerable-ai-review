@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any
 from answerable.github import GitHubClient, GitHubError
 from answerable.markers import (
     _ALL_COMMENT_TERMINAL_MARKERS,
+    _DEFECT_PERSISTS_MARKER,
     _DISAGREEMENT_MARKER,
 )
-from answerable.prompt import CODE_REVIEW_PROMPT
+from answerable.prompt import CODE_REVIEW_PROMPT, DEDUPE_FINDINGS_PROMPT, VERIFY_FINDINGS_PROMPT
 from answerable.sdk import REVIEW_EFFORT, REVIEW_MODEL, QueryOptions, query
 
 if TYPE_CHECKING:
@@ -56,6 +57,12 @@ _TITLE_STOPWORDS = frozenset({
 # Extracts the first ``**...**`` bold block from a comment body. ``DOTALL`` so
 # titles that wrap onto a second line are still captured in one piece.
 _THREAD_TITLE_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+# Budget for the existing-feedback context sent to the dedupe session: each
+# item's text is clipped to the per-item limit, and items past the total are
+# omitted (oldest kept first, matching GitHub's chronological order).
+_DEDUPE_ITEM_CHARS = 2_000
+_DEDUPE_TOTAL_CHARS = 60_000
 
 # Overlap-coefficient threshold for treating two normalized titles as the
 # same finding (|A ∩ B| / min(|A|, |B|) >= threshold).
@@ -382,14 +389,68 @@ class ReviewFinding:
 
 
 @dataclass
+class RefutedFinding:
+    """A finding the adversarial verifier disproved, with its reason."""
+
+    finding: ReviewFinding
+    reason: str
+
+
+@dataclass
+class RevisedFinding:
+    """A finding the adversarial verifier corrected: *revised* replaced *original*."""
+
+    original: ReviewFinding
+    revised: ReviewFinding
+    reason: str
+
+
+@dataclass
+class DuplicateFinding:
+    """A finding the dedupe session matched to feedback already on the PR."""
+
+    finding: ReviewFinding
+    existing: str  # Human-readable label of the existing item it repeats
+    reason: str
+
+
+@dataclass
+class PersistingFinding:
+    """A bug the dedupe session matched to a *resolved* thread it still affects.
+
+    Not posted as a new comment: :meth:`PRReviewer.post_review` replies on
+    *thread* that the defect persists and unresolves it.
+    """
+
+    finding: ReviewFinding
+    thread: ReviewThread
+    existing: str  # Human-readable label of the thread
+    reason: str
+
+
+@dataclass
 class ReviewResult:
-    """Complete review output."""
+    """Complete review output.
+
+    ``findings`` are the findings that survived adversarial verification (or
+    every finding, when verification is off or could not run), with any
+    verifier corrections already applied; ``refuted`` holds the ones the
+    verifier disproved, which are never posted; ``revised`` records each
+    correction, whose ``revised`` finding is the one in ``findings``;
+    ``duplicates`` holds findings the dedupe session matched to feedback
+    already on the PR, which are never posted either; ``persisting`` holds
+    bugs it matched to a resolved thread, which posting reopens instead.
+    """
 
     findings: list[ReviewFinding] = field(default_factory=list)
     summary: str = ""
     tokens_used: int = 0
     cost_usd: float | None = None
     diff: str = ""
+    refuted: list[RefutedFinding] = field(default_factory=list)
+    revised: list[RevisedFinding] = field(default_factory=list)
+    duplicates: list[DuplicateFinding] = field(default_factory=list)
+    persisting: list[PersistingFinding] = field(default_factory=list)
 
 
 @dataclass
@@ -404,6 +465,8 @@ class ReviewThread:
     reply_bodies: list[str] = field(default_factory=list)  # Individual reply bodies (excludes root)
     is_resolved: bool = False
     is_outdated: bool = False  # True when the commented code has changed
+    line: int | None = None  # Root comment's line (current, else original)
+    author: str = ""         # Root comment author's login ("" when unknown)
 
 
 @dataclass
@@ -411,7 +474,7 @@ class PostReviewResult:
     """Outcome of posting a review."""
 
     posted: list[ReviewFinding]     # New findings posted as inline comments
-    reopened: list[ReviewFinding]   # Bug findings flagged as persisting on resolved threads
+    reopened: list[ReviewFinding]   # Bugs replied to on resolved threads, which were unresolved
     filtered: list[ReviewFinding]   # Findings skipped (tracked by issues)
     skipped: list[ReviewFinding]    # Findings skipped (existing unresolved threads)
     disputed: list[ReviewFinding] = field(default_factory=list)  # Findings escalated to issues after a disputing reply
@@ -430,6 +493,30 @@ class UnrepliedComments:
 
     inline: list[ReviewThread] = field(default_factory=list)
     overflow: list[OverflowFinding] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Verdict:
+    """One parsed verifier verdict for a finding."""
+
+    verdict: str  # "confirmed", "refuted", or "revised"
+    reason: str
+    revision: dict[str, Any] | None = None
+
+
+def _review_query_options() -> QueryOptions:
+    """Options for every reviewer query.
+
+    Shared by the review, verification and dedupe sessions.  Read-only
+    tools only.  No resume/continue option exists on
+    :class:`QueryOptions`, so every :func:`query` made with these options
+    starts a fresh session.
+    """
+    return QueryOptions(
+        allowed_tools=["Read", "Glob", "Grep"],
+        model=REVIEW_MODEL,
+        effort=REVIEW_EFFORT,
+    )
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -451,8 +538,12 @@ class PRReviewer:
         max_diff_chars: int = 80_000,
         max_files: int = 50,
         code_host: CodeHost | None = None,
+        verify_findings: bool = True,
+        dedupe_findings: bool = True,
     ) -> None:
         self._repo = github_repo
+        self._verify_findings = verify_findings
+        self._dedupe_findings = dedupe_findings
         self._max_diff_chars = max_diff_chars
         self._max_files = max_files
         self._host = code_host or GitHubClient(
@@ -563,6 +654,10 @@ class PRReviewer:
             root = comments[0]
             all_bodies = "\n".join(c.get("body") or "" for c in comments)
             reply_bodies = [c.get("body") or "" for c in comments[1:]]
+            raw_line = root.get("line")
+            if raw_line is None:
+                raw_line = root.get("originalLine")
+            author = root.get("author")
             threads.append(ReviewThread(
                 thread_id=node.get("id", ""),
                 comment_id=_safe_int(root.get("databaseId")),
@@ -572,6 +667,8 @@ class PRReviewer:
                 reply_bodies=reply_bodies,
                 is_resolved=bool(node.get("isResolved", False)),
                 is_outdated=bool(node.get("isOutdated", False)),
+                line=_safe_int(raw_line) if raw_line is not None else None,
+                author=str(author.get("login") or "") if isinstance(author, dict) else "",
             ))
         return threads
 
@@ -615,6 +712,45 @@ class PRReviewer:
         """Return ``True`` if any comment in *thread* references a GitHub issue."""
         return bool(_ISSUE_LINK_RE.search(thread.all_bodies or ""))
 
+    @classmethod
+    def _should_reopen(cls, finding: ReviewFinding, thread: ReviewThread) -> bool:
+        """Return ``True`` when *finding* re-raises *thread* and should reopen it.
+
+        The thread must be resolved without an issue link (a linked issue
+        already tracks it), and the finding must be a ``bug`` — nits and
+        suggestions on a resolved thread are left alone.
+        """
+        return (
+            thread.is_resolved
+            and not cls._thread_has_issue_link(thread)
+            and finding.severity == "bug"
+        )
+
+    def _reopen_thread(
+        self,
+        pr_number: int,
+        finding: ReviewFinding,
+        thread: ReviewThread,
+    ) -> None:
+        """Reply on resolved *thread* that *finding*'s defect persists, then unresolve it."""
+        logger.info(
+            "Replying to thread for '%s' in %s — defect persists; unresolving",
+            finding.title, finding.file,
+        )
+        reply_body = (
+            f"{_DEFECT_PERSISTS_MARKER} in the current PR:\n\n"
+            + self._format_finding_body(finding)
+        )
+        self._host.reply_to_review_comment(
+            pr_number, thread.comment_id, reply_body,
+        )
+        if not self._host.unresolve_review_thread(thread.thread_id):
+            logger.warning(
+                "Replied on resolved thread for '%s' in %s but could not "
+                "unresolve it",
+                finding.title, finding.file,
+            )
+
     def _categorize_by_thread_state(
         self,
         pr_number: int,
@@ -629,8 +765,9 @@ class PRReviewer:
 
         * **new** — no matching thread; post as new inline comment.
         * **skip** — matching thread is unresolved, or resolved with an issue link.
-        * **reopen** — matching thread is resolved without an issue link
-          (defect persists after a code-fix attempt).
+        * **reopen** — matching thread is resolved without an issue link and
+          the finding is a bug (defect persists after a code-fix attempt);
+          posting replies on it and unresolves it.
 
         If *threads* is ``None`` the helper fetches them itself; callers that
         already hold a parsed list (e.g. :meth:`post_review`) pass it in to
@@ -657,23 +794,17 @@ class PRReviewer:
                     finding.title, finding.file,
                 )
                 skip.append(finding)
-            elif self._thread_has_issue_link(thread):
-                logger.info(
-                    "Skipping finding '%s' in %s — resolved with issue link",
-                    finding.title, finding.file,
-                )
-                skip.append(finding)
-            elif finding.severity != "bug":
-                # Nits/suggestions in resolved threads without an issue link
-                # are skipped — only bug-severity findings get a reply on a
-                # resolved thread flagging that the defect persists.
-                logger.info(
-                    "Skipping %s '%s' in %s — resolved thread (not a bug)",
-                    finding.severity, finding.title, finding.file,
-                )
-                skip.append(finding)
-            else:
+            elif self._should_reopen(finding, thread):
                 reopen.append((finding, thread))
+            else:
+                # Resolved with an issue link, or a nit/suggestion: only
+                # bug-severity findings reopen a resolved thread.
+                logger.info(
+                    "Skipping %s '%s' in %s — resolved thread (%s)",
+                    finding.severity, finding.title, finding.file,
+                    "issue link" if self._thread_has_issue_link(thread) else "not a bug",
+                )
+                skip.append(finding)
 
         return (new, skip, reopen)
 
@@ -806,14 +937,7 @@ class PRReviewer:
             diff=truncated_diff,
         )
 
-        sdk_result = await query(
-            prompt=prompt,
-            options=QueryOptions(
-                allowed_tools=["Read", "Glob", "Grep"],
-                model=REVIEW_MODEL,
-                effort=REVIEW_EFFORT,
-            ),
-        )
+        sdk_result = await query(prompt=prompt, options=_review_query_options())
 
         # Parse structured response
         try:
@@ -865,13 +989,479 @@ class PRReviewer:
                 suggested_code=item.get("suggested_code"),
             ))
 
-        return ReviewResult(
+        result = ReviewResult(
             findings=findings,
             summary=data.get("summary", ""),
             tokens_used=sdk_result.usage.total_tokens,
             cost_usd=sdk_result.usage.total_cost_usd,
             diff=diff,
         )
+        if self._verify_findings and result.findings:
+            await self._verify(result, info, truncated_diff)
+        if self._dedupe_findings and result.findings:
+            await self._dedupe(pr_number, result)
+        return result
+
+    # ------------------------------------------------------------------
+    # Dedupe against existing PR feedback (fresh session)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clip(text: str, limit: int) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n[… clipped, {len(text)} chars total]"
+
+    def _collect_existing_feedback(
+        self,
+        pr_number: int,
+        threads: list[ReviewThread],
+    ) -> list[tuple[str, str, str]]:
+        """Return ``(id, label, text)`` for every piece of feedback on the PR.
+
+        Covers inline review threads (any author, any state — root plus
+        replies), submitted review bodies (earlier runs' summaries and overflow
+        lists, other agents' review summaries), and PR conversation comments.
+        Empty bodies are skipped.  Every item is clipped to
+        :data:`_DEDUPE_ITEM_CHARS`.
+        """
+        items: list[tuple[str, str, str]] = []
+        for idx, thread in enumerate(threads):
+            state = [
+                s for s, on in (("resolved", thread.is_resolved), ("outdated", thread.is_outdated)) if on
+            ] or ["open"]
+            where = f"{thread.path}:{thread.line}" if thread.line else thread.path or "(no path)"
+            by = f" by @{thread.author}" if thread.author else ""
+            label = f"review thread on {where}{by} ({', '.join(state)})"
+            parts = [thread.body or ""]
+            parts.extend(f"Reply: {r}" for r in thread.reply_bodies if r.strip())
+            text = "\n\n".join(p for p in parts if p.strip())
+            if text:
+                items.append((f"T{idx}", label, self._clip(text, _DEDUPE_ITEM_CHARS)))
+        for idx, body in enumerate(self._host.get_pr_review_bodies(pr_number)):
+            if body.strip():
+                items.append((f"R{idx}", "review summary", self._clip(body, _DEDUPE_ITEM_CHARS)))
+        for idx, body in enumerate(self._host.get_pr_comment_bodies(pr_number)):
+            if body.strip():
+                items.append((f"C{idx}", "conversation comment", self._clip(body, _DEDUPE_ITEM_CHARS)))
+        return items
+
+    @staticmethod
+    def _format_existing_feedback(items: list[tuple[str, str, str]]) -> str:
+        """Render *items* for the dedupe prompt within :data:`_DEDUPE_TOTAL_CHARS`."""
+        blocks: list[str] = []
+        total = 0
+        for item_id, label, text in items:
+            block = f"### {item_id} — {label}\n{text}"
+            if total + len(block) > _DEDUPE_TOTAL_CHARS and blocks:
+                omitted = len(items) - len(blocks)
+                logger.warning(
+                    "Dedupe context budget reached; omitting %d of %d existing item(s)",
+                    omitted, len(items),
+                )
+                blocks.append(f"[{omitted} more existing item(s) omitted due to size limits]")
+                break
+            blocks.append(block)
+            total += len(block)
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _parse_duplicates(data: Any, valid_ids: set[str]) -> dict[int, tuple[str, str]]:
+        """Map finding id → ``(existing id, reason)`` from the dedupe JSON.
+
+        An entry whose finding id is not an integer, or whose ``existing`` id
+        does not name an item that was actually shown, is skipped — the
+        finding is then kept.  The first entry for a finding id wins.
+        """
+        if isinstance(data, dict):
+            items = data.get("duplicates") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        result: dict[int, tuple[str, str]] = {}
+        if not isinstance(items, list):
+            return result
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("id")
+            if isinstance(raw_id, bool):
+                continue
+            try:
+                idx = int(raw_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            existing = str(item.get("existing") or "").strip()
+            if existing not in valid_ids:
+                continue
+            result.setdefault(idx, (existing, str(item.get("reason") or "").strip()))
+        return result
+
+    async def _dedupe(self, pr_number: int, result: ReviewResult) -> None:
+        """Drop findings that repeat feedback already on the PR.
+
+        Runs in its own fresh :func:`query` session, sharing no context with
+        the review or verification sessions.  It sees the new findings and
+        every existing piece of PR feedback — inline threads from any author
+        in any state, review summaries, and conversation comments — and lists
+        the findings that repeat an existing item.  Those move from
+        ``result.findings`` to ``result.duplicates``.
+
+        Findings the deterministic title matcher already ties to a review
+        thread (:meth:`_match_finding_to_thread`) are not sent: posting routes
+        those through the skip / defect-persists / dispute-escalation paths in
+        :meth:`post_review`, which must keep seeing them.
+
+        A ``bug`` that repeats a *resolved* thread without an issue link (by any
+        author) means that thread's defect is still present, so it goes to
+        ``result.persisting`` instead, and posting replies on the thread and
+        unresolves it — the same rule :meth:`_categorize_by_thread_state`
+        applies to the reviewer's own threads.  At most one finding reopens a
+        given thread; any further match is a plain duplicate.
+
+        A ``bug`` is dropped only when the item it repeats still carries the
+        defect: an open thread, an issue-linked one, or one being reopened.
+        A bug repeating a review summary or conversation comment — which can
+        neither be reopened nor gate the merge — stays in ``result.findings``
+        and is posted, so a verified, still-present bug always fails the run.
+
+        Fails open: a failed fetch or query, an unparseable response, or a
+        duplicate citing an unknown existing item keeps the finding.
+        """
+        try:
+            raw_threads = self._host.get_pr_review_threads(pr_number)
+            threads = self._parse_review_threads(raw_threads) if raw_threads else []
+            candidates = [
+                (idx, f) for idx, f in enumerate(result.findings)
+                if self._match_finding_to_thread(f, threads) is None
+            ]
+            if not candidates:
+                return
+            existing = self._collect_existing_feedback(pr_number, threads)
+        except Exception:
+            logger.warning(
+                "Failed to fetch existing PR feedback for dedupe; keeping all "
+                "%d finding(s)", len(result.findings), exc_info=True,
+            )
+            return
+        if not existing:
+            return
+
+        prompt = DEDUPE_FINDINGS_PROMPT.format(
+            findings=self._format_findings_for_verification([f for _, f in candidates]),
+            existing=self._format_existing_feedback(existing),
+        )
+        try:
+            sdk_result = await query(prompt=prompt, options=_review_query_options())
+        except Exception:
+            logger.warning(
+                "Dedupe session failed; keeping all %d finding(s)",
+                len(result.findings), exc_info=True,
+            )
+            return
+
+        result.tokens_used += sdk_result.usage.total_tokens
+        if sdk_result.usage.total_cost_usd is not None:
+            result.cost_usd = (result.cost_usd or 0.0) + sdk_result.usage.total_cost_usd
+
+        try:
+            data = sdk_result.parse_json()
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "Failed to parse dedupe JSON; keeping all %d finding(s)",
+                len(result.findings),
+            )
+            return
+
+        labels = {item_id: f"{item_id} ({label})" for item_id, label, _ in existing}
+        duplicates = self._parse_duplicates(data, set(labels))
+        drop: dict[int, tuple[str, str]] = {}
+        for local_idx, (global_idx, _) in enumerate(candidates):
+            if local_idx in duplicates:
+                drop[global_idx] = duplicates[local_idx]
+
+        thread_by_item = {f"T{idx}": t for idx, t in enumerate(threads)}
+        reopening: set[str] = set()
+        kept: list[ReviewFinding] = []
+        for idx, finding in enumerate(result.findings):
+            if idx not in drop:
+                kept.append(finding)
+                continue
+            existing_id, reason = drop[idx]
+            thread = thread_by_item.get(existing_id)
+            if (
+                thread is not None
+                and self._should_reopen(finding, thread)
+                and thread.thread_id not in reopening
+            ):
+                # The verified defect repeats a resolved thread: it is still
+                # there, so posting reopens that thread rather than staying
+                # silent about it.
+                reopening.add(thread.thread_id)
+                logger.info(
+                    "Dedupe matched %s '%s' in %s:%d to resolved %s — defect "
+                    "persists: %s",
+                    finding.severity, finding.title, finding.file, finding.line,
+                    labels[existing_id], reason or "(no reason given)",
+                )
+                result.persisting.append(PersistingFinding(
+                    finding=finding, thread=thread,
+                    existing=labels[existing_id], reason=reason,
+                ))
+                continue
+            if thread is None and finding.severity == "bug":
+                # A review summary or conversation comment can't be reopened
+                # and nothing gates on it, so dropping a verified bug that
+                # repeats one would let a still-present defect pass the run.
+                # Post it instead.
+                logger.info(
+                    "Dedupe matched bug '%s' in %s:%d to %s, which cannot be "
+                    "reopened — posting it anyway: %s",
+                    finding.title, finding.file, finding.line,
+                    labels[existing_id], reason or "(no reason given)",
+                )
+                kept.append(finding)
+                continue
+            logger.info(
+                "Dedupe dropped %s '%s' in %s:%d — repeats %s: %s",
+                finding.severity, finding.title, finding.file, finding.line,
+                labels[existing_id], reason or "(no reason given)",
+            )
+            result.duplicates.append(DuplicateFinding(
+                finding=finding, existing=labels[existing_id], reason=reason,
+            ))
+        result.findings = kept
+
+    # ------------------------------------------------------------------
+    # Adversarial verification (fresh session)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_findings_for_verification(findings: list[ReviewFinding]) -> str:
+        """Render *findings* as numbered claims for the verifier prompt.
+
+        Carries only what the finding asserts — site, severity, title,
+        description — not the reviewer's summary, fix plan, or suggested code,
+        so the verifier judges the claim against the code rather than being
+        anchored on the reviewer's argument for it.
+        """
+        blocks: list[str] = []
+        for idx, finding in enumerate(findings):
+            blocks.append(
+                f"### Finding {idx}\n"
+                f"- File: {finding.file}\n"
+                f"- Line: {finding.line}\n"
+                f"- Severity: {finding.severity}\n"
+                f"- Title: {finding.title}\n"
+                f"- Description: {finding.description}"
+            )
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _parse_verdicts(data: Any) -> dict[int, _Verdict]:
+        """Map finding id → :class:`_Verdict` from the verifier's JSON.
+
+        Entries that are not dicts, carry a non-integer id, or name a verdict
+        other than ``confirmed``/``refuted``/``revised`` are skipped; the first
+        verdict for an id wins.
+        """
+        if isinstance(data, dict):
+            items = data.get("verdicts") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        verdicts: dict[int, _Verdict] = {}
+        if not isinstance(items, list):
+            return verdicts
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("id")
+            if isinstance(raw_id, bool):
+                continue
+            try:
+                idx = int(raw_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if verdict not in ("confirmed", "refuted", "revised"):
+                continue
+            revision = item.get("revised")
+            verdicts.setdefault(idx, _Verdict(
+                verdict=verdict,
+                reason=str(item.get("reason") or "").strip(),
+                revision=revision if isinstance(revision, dict) else None,
+            ))
+        return verdicts
+
+    @staticmethod
+    def _apply_revision(
+        finding: ReviewFinding,
+        revision: dict[str, Any] | None,
+    ) -> ReviewFinding | None:
+        """Return *finding* with the verifier's *revision* applied, or ``None``.
+
+        Omitted, null, or blank fields keep the original value; the same
+        normalisation as the review parse applies (``line`` an int ``>= 0``,
+        ``severity`` one of ``bug``/``suggestion``/``nit``), and an invalid
+        value keeps the original rather than corrupting the finding.
+
+        ``suggested_code`` is never carried over: the verifier never saw the
+        original (it is withheld to avoid anchoring), so after a correction it
+        may target the wrong line or the wrong fix.  The revision's own
+        ``suggested_code`` is used when given; otherwise the revised finding
+        posts its ``fix_plan`` instead.
+
+        Returns ``None`` when *revision* is missing or changes nothing, so the
+        caller keeps the original as if it were confirmed.
+        """
+        if not revision:
+            return None
+
+        def text(key: str, default: str) -> str:
+            value = revision.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+            return default
+
+        line = finding.line
+        raw_line = revision.get("line")
+        if raw_line is not None and not isinstance(raw_line, bool):
+            try:
+                candidate = int(raw_line)
+            except (TypeError, ValueError):
+                candidate = -1
+            if candidate >= 0:
+                line = candidate
+
+        severity = text("severity", finding.severity).strip().lower()
+        if severity not in ("bug", "suggestion", "nit"):
+            severity = finding.severity
+
+        raw_code = revision.get("suggested_code")
+        suggested_code = raw_code if isinstance(raw_code, str) and raw_code.strip() else None
+
+        revised = ReviewFinding(
+            file=text("file", finding.file).strip(),
+            line=line,
+            severity=severity,
+            title=text("title", finding.title),
+            description=text("description", finding.description),
+            fix_plan=text("fix_plan", finding.fix_plan),
+            suggested_code=suggested_code,
+        )
+        unchanged = ReviewFinding(
+            file=finding.file, line=finding.line, severity=finding.severity,
+            title=finding.title, description=finding.description,
+            fix_plan=finding.fix_plan, suggested_code=None,
+        )
+        if revised == unchanged:
+            return None
+        return revised
+
+    async def _verify(
+        self,
+        result: ReviewResult,
+        info: dict[str, str],
+        truncated_diff: str,
+    ) -> None:
+        """Adversarially verify ``result.findings`` in a fresh agent session.
+
+        A separate :func:`query` call starts a new session, so the verifier
+        shares none of the reviewer's context: it sees the PR, the same
+        truncated diff, and the findings as bare claims, and tries to disprove
+        each one with the same read-only tools.  Per finding it answers:
+
+        * ``confirmed`` — kept as-is.
+        * ``refuted`` — moved from ``result.findings`` to ``result.refuted``.
+        * ``revised`` — replaced in place by the verifier's corrected finding
+          (see :meth:`_apply_revision`) and recorded in ``result.revised``.
+
+        Usage is added to the result's totals.
+
+        Fails open: only an explicit ``refuted`` verdict drops a finding.  A
+        failed query, an unparseable response, a missing verdict, or a
+        ``revised`` verdict whose revision is missing or changes nothing keeps
+        the original finding, so verification can only ever reduce false
+        positives or sharpen a finding — never turn a review into an
+        infrastructure failure or silently lose a real defect.
+        """
+        findings = result.findings
+        prompt = VERIFY_FINDINGS_PROMPT.format(
+            pr_title=info["title"],
+            pr_body=info["body"] or "(no description)",
+            diff=truncated_diff,
+            findings=self._format_findings_for_verification(findings),
+        )
+        try:
+            sdk_result = await query(prompt=prompt, options=_review_query_options())
+        except Exception:
+            logger.warning(
+                "Adversarial verification failed; keeping all %d finding(s)",
+                len(findings), exc_info=True,
+            )
+            return
+
+        result.tokens_used += sdk_result.usage.total_tokens
+        if sdk_result.usage.total_cost_usd is not None:
+            result.cost_usd = (result.cost_usd or 0.0) + sdk_result.usage.total_cost_usd
+
+        try:
+            verdicts = self._parse_verdicts(sdk_result.parse_json())
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "Failed to parse verification JSON; keeping all %d finding(s)",
+                len(findings),
+            )
+            return
+
+        kept: list[ReviewFinding] = []
+        for idx, finding in enumerate(findings):
+            verdict = verdicts.get(idx)
+            if verdict is None:
+                logger.warning(
+                    "Verifier returned no verdict for '%s' in %s; keeping it",
+                    finding.title, finding.file,
+                )
+                kept.append(finding)
+                continue
+            reason = verdict.reason or "(no reason given)"
+            if verdict.verdict == "refuted":
+                logger.info(
+                    "Verifier refuted %s '%s' in %s:%d — %s",
+                    finding.severity, finding.title, finding.file,
+                    finding.line, reason,
+                )
+                result.refuted.append(
+                    RefutedFinding(finding=finding, reason=verdict.reason),
+                )
+                continue
+            if verdict.verdict == "revised":
+                revised = self._apply_revision(finding, verdict.revision)
+                if revised is None:
+                    logger.warning(
+                        "Verifier marked '%s' in %s revised without a usable "
+                        "revision; keeping the original",
+                        finding.title, finding.file,
+                    )
+                    kept.append(finding)
+                    continue
+                logger.info(
+                    "Verifier revised %s '%s' in %s:%d → %s '%s' in %s:%d — %s",
+                    finding.severity, finding.title, finding.file, finding.line,
+                    revised.severity, revised.title, revised.file, revised.line,
+                    reason,
+                )
+                result.revised.append(RevisedFinding(
+                    original=finding, revised=revised, reason=verdict.reason,
+                ))
+                kept.append(revised)
+                continue
+            kept.append(finding)
+        result.findings = kept
 
     # ------------------------------------------------------------------
     # Review posting
@@ -1126,11 +1716,20 @@ class PRReviewer:
         findings: list[ReviewFinding],
         summary: str,
         diff: str | None = None,
+        persisting: list[PersistingFinding] | None = None,
     ) -> PostReviewResult:
         """Post an inline review on the PR.
 
         If *diff* is provided it is used to validate line numbers;
         otherwise all findings are posted as-is.
+
+        *persisting* (from :attr:`ReviewResult.persisting`) are bugs the dedupe
+        session matched to resolved threads.  Each is re-checked against the
+        freshly fetched threads — skipped if its thread is gone, no longer
+        resolved, or now issue-linked, filtered if an open issue tracks it —
+        and otherwise its thread gets a "defect persists" reply and is
+        unresolved, exactly like a ``reopen`` from
+        :meth:`_categorize_by_thread_state`.  One reply per thread.
 
         Returns a :class:`PostReviewResult` describing what was posted,
         flagged as persisting on a resolved thread, filtered (tracked by
@@ -1168,36 +1767,41 @@ class PRReviewer:
         findings = self._filter_tracked_findings(findings)
         filtered = [f for f in post_disagreement if f not in findings]
 
-        if not findings:
+        persist_reopen, persist_skip, persist_filtered = self._recheck_persisting(
+            persisting or [], threads,
+        )
+        filtered.extend(persist_filtered)
+
+        if not findings and not persist_reopen:
             logger.info(
                 "No findings left to post — %d filtered, %d escalated",
                 len(filtered), len(disputed),
             )
             return PostReviewResult(
-                posted=[], reopened=[], filtered=filtered, skipped=[],
+                posted=[], reopened=[], filtered=filtered, skipped=persist_skip,
                 disputed=disputed,
             )
 
         # Categorize remaining findings by review thread state
-        new_findings, skip, reopen = self._categorize_by_thread_state(
-            pr_number, findings, threads=threads,
-        )
+        if findings:
+            new_findings, skip, reopen = self._categorize_by_thread_state(
+                pr_number, findings, threads=threads,
+            )
+        else:
+            new_findings, skip, reopen = [], [], []
+        skip.extend(persist_skip)
 
-        # Reply for resolved threads where the defect persists
-        reopened_findings = [f for f, _ in reopen]
-        for finding, thread in reopen:
-            logger.info(
-                "Replying to thread for '%s' in %s — defect persists",
-                finding.title, finding.file,
-            )
-            reply_body = (
-                "This finding was previously resolved, but the defect "
-                "persists in the current PR:\n\n"
-                + self._format_finding_body(finding)
-            )
-            self._host.reply_to_review_comment(
-                pr_number, thread.comment_id, reply_body,
-            )
+        # Reply on, and unresolve, resolved threads where the defect persists —
+        # once per thread, whichever path matched it.
+        reopened_findings: list[ReviewFinding] = []
+        reopened_threads: set[str] = set()
+        for finding, thread in [*reopen, *persist_reopen]:
+            if thread.thread_id in reopened_threads:
+                skip.append(finding)
+                continue
+            reopened_threads.add(thread.thread_id)
+            self._reopen_thread(pr_number, finding, thread)
+            reopened_findings.append(finding)
 
         if not new_findings:
             logger.info("No new findings to post")
@@ -1223,6 +1827,50 @@ class PRReviewer:
             disputed=disputed,
         )
 
+    def _recheck_persisting(
+        self,
+        persisting: list[PersistingFinding],
+        threads: list[ReviewThread],
+    ) -> tuple[
+        list[tuple[ReviewFinding, ReviewThread]],
+        list[ReviewFinding],
+        list[ReviewFinding],
+    ]:
+        """Split *persisting* into ``(reopen, skip, filtered)`` against fresh state.
+
+        The dedupe session saw the threads as they were during the review; by
+        posting time a thread may have been unresolved, linked to an issue, or
+        deleted.  Each entry is looked up again by thread ID in *threads* and
+        re-checked with :meth:`_should_reopen`; an entry whose finding an open
+        issue now tracks is filtered.
+        """
+        if not persisting:
+            return [], [], []
+        by_id = {t.thread_id: t for t in threads}
+        issues = self._host.list_issues(state="open") or []
+        reopen: list[tuple[ReviewFinding, ReviewThread]] = []
+        skip: list[ReviewFinding] = []
+        filtered: list[ReviewFinding] = []
+        for entry in persisting:
+            finding = entry.finding
+            thread = by_id.get(entry.thread.thread_id)
+            if thread is None or not self._should_reopen(finding, thread):
+                logger.info(
+                    "Not reopening thread for '%s' in %s — it is gone, open, "
+                    "or issue-linked now",
+                    finding.title, finding.file,
+                )
+                skip.append(finding)
+            elif self._is_finding_tracked(finding, issues):
+                logger.info(
+                    "Not reopening thread for '%s' in %s — tracked by open issue",
+                    finding.title, finding.file,
+                )
+                filtered.append(finding)
+            else:
+                reopen.append((finding, thread))
+        return reopen, skip, filtered
+
     # ------------------------------------------------------------------
     # Reply-coverage audit (read-only, makes no model call)
     # ------------------------------------------------------------------
@@ -1231,18 +1879,22 @@ class PRReviewer:
     def _is_unreplied_ai_thread(thread: ReviewThread) -> bool:
         """Return ``True`` if *thread* is an open AI finding awaiting a reply.
 
-        An inline thread counts as unreplied iff its root matches
-        :data:`_AI_FINDING_RE` (an icon + bold title the reviewer emits), it is
-        neither resolved nor outdated (both exempt: a comment-remediation run
-        does not act on them either), and it carries no reply
-        (:attr:`ReviewThread.reply_bodies` is empty).
+        An inline thread must be neither resolved nor outdated (both exempt: a
+        comment-remediation run does not act on them either).  It then counts
+        as unreplied when either:
+
+        * its root matches :data:`_AI_FINDING_RE` (an icon + bold title the
+          reviewer emits) and it carries no reply; or
+        * its *last* reply is the reviewer's own "defect persists" reply
+          (:data:`_DEFECT_PERSISTS_MARKER`) — the reviewer reopened it, on its
+          own thread or anyone else's, and nobody has answered since.  The
+          reviewer's reply must not count as the answer.
         """
-        return (
-            not thread.is_resolved
-            and not thread.is_outdated
-            and not thread.reply_bodies
-            and _AI_FINDING_RE.match(thread.body or "") is not None
-        )
+        if thread.is_resolved or thread.is_outdated:
+            return False
+        if thread.reply_bodies:
+            return thread.reply_bodies[-1].startswith(_DEFECT_PERSISTS_MARKER)
+        return _AI_FINDING_RE.match(thread.body or "") is not None
 
     def _union_overflow_findings(self, pr_number: int) -> list[OverflowFinding]:
         """Return the union of overflow findings across *every* review body.

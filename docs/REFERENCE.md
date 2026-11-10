@@ -109,6 +109,10 @@ different severity, folded into a broader comment, or already resolved.
   broken on resolved threads (would reopen)*; they fail the run like a newly
   posted finding. Nits and suggestions that repeat a resolved thread are plain
   duplicates.
+- **A bug that repeats a review summary or conversation comment** is still
+  posted: neither can be reopened or gates the merge, so dropping it would let
+  a verified, still-present bug pass the run. Nits and suggestions that repeat
+  one are dropped.
 - Findings that the title matcher already ties to one of the reviewer's own
   threads are not sent: posting still applies its deterministic skip,
   *defect persists* re-flag and disputed-finding escalation to them.

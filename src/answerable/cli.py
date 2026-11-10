@@ -237,7 +237,8 @@ def main() -> None:
         log.info(
             "Adversarial verification dropped %d and revised %d of %d finding(s)",
             len(result.refuted), len(result.revised),
-            len(result.refuted) + len(result.findings) + len(result.duplicates),
+            len(result.refuted) + len(result.findings) + len(result.duplicates)
+            + len(result.persisting),
         )
     if result.duplicates:
         log.info(

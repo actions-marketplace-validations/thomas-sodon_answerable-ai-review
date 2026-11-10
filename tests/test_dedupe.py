@@ -255,7 +255,10 @@ async def test_runs_after_verification_on_its_output() -> None:
     """Verify first, then dedupe what survived (with revisions applied)."""
     verify = _result({"verdicts": [
         {"id": 0, "verdict": "refuted", "reason": "x is never 0"},
-        {"id": 1, "verdict": "revised", "revised": {"title": "Lock is None"}},
+        # Downgraded to a suggestion, which a review-summary match may drop
+        # (a bug matching one would still be posted).
+        {"id": 1, "verdict": "revised",
+         "revised": {"title": "Lock is None", "severity": "suggestion"}},
     ]})
     dedupe = _result({"duplicates": [
         {"id": 0, "existing": "R0", "reason": "other bot said so"},

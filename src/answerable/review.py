@@ -1121,6 +1121,12 @@ class PRReviewer:
         applies to the reviewer's own threads.  At most one finding reopens a
         given thread; any further match is a plain duplicate.
 
+        A ``bug`` is dropped only when the item it repeats still carries the
+        defect: an open thread, an issue-linked one, or one being reopened.
+        A bug repeating a review summary or conversation comment — which can
+        neither be reopened nor gate the merge — stays in ``result.findings``
+        and is posted, so a verified, still-present bug always fails the run.
+
         Fails open: a failed fetch or query, an unparseable response, or a
         duplicate citing an unknown existing item keeps the finding.
         """
@@ -1204,6 +1210,19 @@ class PRReviewer:
                     finding=finding, thread=thread,
                     existing=labels[existing_id], reason=reason,
                 ))
+                continue
+            if thread is None and finding.severity == "bug":
+                # A review summary or conversation comment can't be reopened
+                # and nothing gates on it, so dropping a verified bug that
+                # repeats one would let a still-present defect pass the run.
+                # Post it instead.
+                logger.info(
+                    "Dedupe matched bug '%s' in %s:%d to %s, which cannot be "
+                    "reopened — posting it anyway: %s",
+                    finding.title, finding.file, finding.line,
+                    labels[existing_id], reason or "(no reason given)",
+                )
+                kept.append(finding)
                 continue
             logger.info(
                 "Dedupe dropped %s '%s' in %s:%d — repeats %s: %s",

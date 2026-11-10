@@ -176,18 +176,45 @@ async def test_one_persisting_finding_per_thread() -> None:
     assert [d.finding.title for d in result.duplicates] == ["Divides by zero"]
 
 
-@pytest.mark.asyncio
-async def test_review_summary_match_is_never_persisting() -> None:
-    reviewer = PRReviewer("owner/repo", code_host=_host([]), verify_findings=False)
-    reviewer._host.get_pr_review_bodies.return_value = ["zero division here"]  # type: ignore[attr-defined]
-    result = ReviewResult(findings=[_bug()])
+async def _dedupe_against_bodies(
+    finding: ReviewFinding, existing_id: str,
+) -> ReviewResult:
+    host = _host([])
+    host.get_pr_review_bodies.return_value = ["Additional findings: zero division"]
+    host.get_pr_comment_bodies.return_value = ["Division by zero — fixed in abc123"]
+    reviewer = PRReviewer("owner/repo", code_host=host, verify_findings=False)
+    result = ReviewResult(findings=[finding])
     response = QueryResult(
-        response=json.dumps({"duplicates": [{"id": 0, "existing": "R0"}]}), usage=QueryUsage(),
+        response=json.dumps({"duplicates": [{"id": 0, "existing": existing_id}]}),
+        usage=QueryUsage(),
     )
     with patch("answerable.review.query", new_callable=AsyncMock, return_value=response):
         await reviewer._dedupe(1, result)
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_id", ["R0", "C0"])
+async def test_bug_matching_summary_or_comment_is_still_posted(existing_id: str) -> None:
+    """A review summary or conversation comment can't be reopened and isn't
+    gated, so dropping a verified bug that repeats one would let a still-present
+    defect pass the run.  It is kept and posted instead."""
+    bug = _bug()
+    result = await _dedupe_against_bodies(bug, existing_id)
+
+    assert result.findings == [bug]
+    assert result.duplicates == []
     assert result.persisting == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_id", ["R0", "C0"])
+async def test_non_bug_matching_summary_or_comment_is_dropped(existing_id: str) -> None:
+    result = await _dedupe_against_bodies(_bug(severity="nit"), existing_id)
+
+    assert result.findings == []
     assert len(result.duplicates) == 1
+    assert result.persisting == []
 
 
 # ------------------------------------------------------------------

@@ -79,8 +79,10 @@ def _review() -> QueryResult:
 async def _run(
     host: MagicMock, *responses: object, dedupe: bool = True, verify: bool = False,
 ) -> tuple[Any, AsyncMock]:
+    # The fix check is covered in test_resolve_fixed.py; keep it out of here.
     reviewer = PRReviewer(
         "owner/repo", code_host=host, verify_findings=verify, dedupe_findings=dedupe,
+        resolve_fixed=False,
     )
     with patch("answerable.review.query", new_callable=AsyncMock) as mock_query:
         mock_query.side_effect = list(responses)

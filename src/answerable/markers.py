@@ -32,6 +32,17 @@ _DEFECT_PERSISTS_MARKER = (
     "This finding was previously resolved, but the defect persists"
 )
 
+# Opening of the reply the reviewer posts after it resolves one of its own
+# review threads because the fix-check session found the defect gone from the
+# current code.  The reviewer resolves first and replies only once that
+# succeeds.  A thread that is unresolved again while its *last* reply carries
+# this marker was reopened by someone who has not said why, so the
+# reply-coverage gate treats it as awaiting an answer, and later reviews never
+# resolve it again.
+_AUTO_RESOLVED_MARKER = (
+    "Resolved automatically: this defect is no longer present"
+)
+
 # Every terminal verdict phrase a comment-remediation tool can post — bug verdicts
 # plus the suggestion / nit / human verdicts.  A line carrying one closes the
 # thread (or, on the overflow roll-up, the ``of-<hash>`` finding on that line).

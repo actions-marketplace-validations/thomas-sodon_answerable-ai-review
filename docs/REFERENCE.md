@@ -17,7 +17,7 @@ Detailed behaviour of the CLI and the GitHub Action. For setup, see the
 | `ANTHROPIC_API_KEY` **or** `CLAUDE_CODE_OAUTH_TOKEN` | the review itself (not needed for `--require-comment-replies`) |
 | `GH_TOKEN` / `GITHUB_TOKEN` (or a `gh auth login` session) | reading the PR, posting reviews, opening escalation issues |
 
-The GitHub token needs `pull-requests: write` to post reviews, reply on threads and unresolve them, and
+The GitHub token needs `pull-requests: write` to post reviews, reply on threads and resolve or unresolve them, and
 `issues: write` for the disputed-finding escalation.
 
 ## CLI usage
@@ -29,6 +29,7 @@ answerable --repo owner/repo --pr 42 --max-diff-chars 100000 --max-files 75
 answerable --repo owner/repo --pr 42 --require-comment-replies   # reply-coverage audit only
 answerable --repo owner/repo --pr 42 --skip-verification         # post findings unverified
 answerable --repo owner/repo --pr 42 --skip-dedupe               # don't drop findings already raised on the PR
+answerable --repo owner/repo --pr 42 --skip-resolve-fixed        # don't resolve threads whose defect is fixed
 ```
 
 | Option | Default | Meaning |
@@ -42,6 +43,7 @@ answerable --repo owner/repo --pr 42 --skip-dedupe               # don't drop fi
 | `--require-comment-replies` | off | Check-only mode: skip the review, audit reply coverage |
 | `--skip-verification` | off | Skip the adversarial verification pass and post the reviewer's findings as-is |
 | `--skip-dedupe` | off | Skip the session that drops findings repeating feedback already on the PR |
+| `--skip-resolve-fixed` | off | Skip the session that [resolves threads whose defect is fixed](#resolve-fixed-threads) |
 
 `--require-comment-replies` takes precedence: when it is set, `--dry-run` has
 no effect and no diff review is run.
@@ -122,11 +124,53 @@ different severity, folded into a broader comment, or already resolved.
 - Disable it with `--skip-dedupe`, `dedupe_findings = 0`, or the
   `dedupe-findings: false` action input.
 
+## Resolve fixed threads
+
+Last, another fresh `query()` session, sharing no context with the other
+sessions, checks the reviewer's open review threads against the current code.
+It receives the PR title and description, the same truncated diff, and each
+candidate thread's path, line, outdated state, root comment and replies. It
+reads the code at the PR's head with the same read-only tools and answers one
+verdict per thread: `fixed`, `present` or `unsure`.
+
+A thread is a candidate when it is unresolved, has no issue link, and is the
+reviewer's to close:
+
+- its root is one of the reviewer's findings (a 🐛, 💡 or ✏️ icon with a bold
+  title), open or outdated, with or without replies; or
+- its root is someone else's, but the reviewer's latest reply on it is the
+  *"This finding was previously resolved, but the defect persists"* one.
+
+Threads that a finding from this run matches are never sent, because the
+reviewer just found that defect again. That covers a title match and a dedupe
+match. The session is skipped when there are no candidates, including when
+the review produced no findings at all.
+
+- **Only a `fixed` verdict with a reason resolves a thread.** `present`,
+  `unsure`, a missing verdict, an unparseable response or a failed session
+  leave every thread open: a wrongly resolved thread hides a real defect.
+  Threads past the 60,000-character context budget are not checked and stay
+  open.
+- At posting time each thread is re-checked. It is skipped if it is gone,
+  resolved, now issue-linked, matched by a finding being posted, or has new
+  replies since the check (someone may have said it is not fixed). Otherwise
+  it is resolved, and once GitHub confirms that, it gets a reply starting
+  *"Resolved automatically: this defect is no longer present"* with the
+  session's reason. If resolving fails, nothing is posted and the next run
+  tries again.
+- **Someone can overrule it** by unresolving the thread. The reviewer never
+  resolves that thread again, and the reply-coverage gate counts it as
+  unanswered until someone replies after the automatic one.
+- Resolving threads never fails the run. `--dry-run` lists the threads under
+  *Fixed in the current code (would resolve)* and resolves none.
+- Disable it with `--skip-resolve-fixed`, `resolve_fixed_threads = 0`, or the
+  `resolve-fixed-threads: false` action input.
+
 ## Exit codes
 
 | Mode | Exit `0` | Exit `1` |
 |---|---|---|
-| Review (default) | Nothing new was posted: no findings, an empty diff, or every finding was already tracked by an issue, escalated to an issue, or matched an existing thread that is still open (or was resolved with an issue link) | At least one finding (any severity) was newly posted, or a bug was flagged as persisting with a reply on its resolved thread, which was unresolved; **or** the review failed (API/SDK error); **or** posting the review failed (findings are then printed to the log) |
+| Review (default) | Nothing new was posted: no findings, an empty diff, or every finding was already tracked by an issue, escalated to an issue, or matched an existing thread that is still open (or was resolved with an issue link). Resolving fixed threads does not change the exit code | At least one finding (any severity) was newly posted, or a bug was flagged as persisting with a reply on its resolved thread, which was unresolved; **or** the review failed (API/SDK error); **or** posting the review failed (findings are then printed to the log) |
 | `--dry-run` | No finding would be posted or flagged as persisting after the same issue/thread filtering a real run applies | At least one finding would be posted or flagged as persisting (if the filtering itself errors, any raw finding counts); **or** the review failed |
 | `--require-comment-replies` | Every reviewer finding has been answered | At least one unanswered finding; **or** the audit could not read the PR (a `gh`/GraphQL outage fails closed) |
 
@@ -138,7 +182,9 @@ A finding counts as **answered** when:
   that a thread whose last reply is the reviewer's own *"This finding was
   previously resolved, but the defect persists"* reply is unanswered until
   someone replies after it (on any thread, including ones other people
-  opened);
+  opened), and so is an unresolved thread whose last reply is the reviewer's
+  own *"Resolved automatically"* reply (someone unresolved it without saying
+  why);
 - *overflow*: a PR comment containing the `<!-- answerable:overflow-ack -->` marker
   lists its `of-<hash>` handle on a line together with one of these verdict
   phrases: `Could not prove this defect`, `Could not prove this bug`,
@@ -166,6 +212,7 @@ gh_timeout = 30
 require_comment_replies = 0   # 1 = run in reply-coverage audit mode by default
 verify_findings = 1           # 0 = skip adversarial verification of findings
 dedupe_findings = 1           # 0 = skip dedupe against existing PR feedback
+resolve_fixed_threads = 1     # 0 = don't resolve threads whose defect is fixed
 ```
 
 A file that fails to parse is ignored; a value that is not an integer falls
@@ -174,8 +221,8 @@ back to its default.
 **Environment variables** override the config file:
 `ANSWERABLE_MAX_DIFF_CHARS`, `ANSWERABLE_MAX_FILES`,
 `ANSWERABLE_GH_TIMEOUT`, `ANSWERABLE_REQUIRE_COMMENT_REPLIES`,
-`ANSWERABLE_VERIFY_FINDINGS`, `ANSWERABLE_DEDUPE_FINDINGS`
-(integers; blank or non-integer values are ignored).
+`ANSWERABLE_VERIFY_FINDINGS`, `ANSWERABLE_DEDUPE_FINDINGS`,
+`ANSWERABLE_RESOLVE_FIXED_THREADS` (integers; blank or non-integer values are ignored).
 
 The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
 `REVIEW_EFFORT`).
@@ -193,6 +240,7 @@ The model and effort are fixed in `src/answerable/sdk.py` (`REVIEW_MODEL`,
 | `dry-run` | `false` | `true` prints findings instead of posting |
 | `verify-findings` | `true` | `false` skips the [adversarial verification](#adversarial-verification) pass |
 | `dedupe-findings` | `true` | `false` skips the [dedupe against existing feedback](#dedupe-against-existing-feedback) pass |
+| `resolve-fixed-threads` | `true` | `false` skips the pass that [resolves threads whose defect is fixed](#resolve-fixed-threads) |
 | `max-diff-chars`, `max-files`, `gh-timeout` | tool defaults | Passed through to the CLI |
 | `python-version` | `3.14` | Python used to run the reviewer |
 
@@ -222,4 +270,7 @@ Before posting, the reviewer filters findings against the PR's current state:
   a bug to;
 - findings on a thread where someone replied *"Could not prove this defect"*
   are escalated to a GitHub issue (labels `ai-review` and the severity)
-  instead of being re-posted.
+  instead of being re-posted;
+- the reviewer's open threads that no finding matches, and whose defect the
+  [fix check](#resolve-fixed-threads) finds gone from the current code, are
+  resolved with a reply.

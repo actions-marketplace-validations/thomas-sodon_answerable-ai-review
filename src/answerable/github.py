@@ -46,6 +46,8 @@ class CodeHost(Protocol):
 
     def unresolve_review_thread(self, thread_id: str) -> bool: ...
 
+    def resolve_review_thread(self, thread_id: str) -> bool: ...
+
     def list_issues(
         self,
         *,
@@ -385,6 +387,44 @@ class GitHubClient:
         except (GitHubError, json.JSONDecodeError, AttributeError, TypeError):
             logger.warning(
                 "Failed to unresolve review thread %s", thread_id, exc_info=True,
+            )
+            return False
+
+    def resolve_review_thread(self, thread_id: str) -> bool:
+        """Mark the review thread *thread_id* (GraphQL node ID) resolved.
+
+        Best-effort, like :meth:`unresolve_review_thread`: logs a warning and
+        returns ``False`` on failure, ``True`` once GitHub reports the thread
+        resolved.
+        """
+        if not thread_id:
+            return False
+        mutation = (
+            "mutation($threadId:ID!){"
+            "resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}"
+            "}"
+        )
+        try:
+            result = self._run([
+                "gh", "api", "graphql",
+                "-f", f"query={mutation}",
+                "-f", f"threadId={thread_id}",
+            ])
+            data = json.loads(result.stdout or "{}")
+            thread = (
+                ((data.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}
+                if isinstance(data, dict) else {}
+            )
+            if not isinstance(data, dict) or data.get("errors") or thread.get("isResolved") is not True:
+                logger.warning(
+                    "GraphQL refused to resolve review thread %s: %.500s",
+                    thread_id, result.stdout,
+                )
+                return False
+            return True
+        except (GitHubError, json.JSONDecodeError, AttributeError, TypeError):
+            logger.warning(
+                "Failed to resolve review thread %s", thread_id, exc_info=True,
             )
             return False
 

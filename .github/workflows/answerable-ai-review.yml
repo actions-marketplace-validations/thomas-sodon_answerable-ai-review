@@ -3,12 +3,8 @@ name: Answerable AI Review
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # Re-check reply coverage when someone replies to (or reviews) a finding,
-  # so the gate turns green without another push.
-  pull_request_review_comment:
-    types: [created, edited, deleted]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
+  # Replies to findings re-run the gate from answerable-ai-review-replies.yml,
+  # so they don't add a skipped "review" check to the PR.
 
 permissions:
   contents: read
@@ -22,10 +18,10 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    # Pushes and replies use separate groups, so a reply never cancels the
-    # gate a push's review is waiting on.
+    # Replies use their own group (answerable-ai-review-replies.yml), so a
+    # reply never cancels the gate a push's review is waiting on.
     concurrency:
-      group: answerable-replies-${{ github.event.pull_request.number }}-${{ github.event_name == 'pull_request' && 'push' || 'reply' }}
+      group: answerable-replies-${{ github.event.pull_request.number }}-push
       cancel-in-progress: true
     steps:
       - name: Reply coverage
@@ -42,7 +38,6 @@ jobs:
     if: >-
       !cancelled() &&
       (needs.replies.result == 'success' || needs.replies.result == 'failure') &&
-      github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     # One review per PR at a time; a newer push cancels an older review.

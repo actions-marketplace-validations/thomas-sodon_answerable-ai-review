@@ -16,8 +16,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
@@ -32,3 +32,70 @@ jobs:
         run: python -m mypy src/
       - name: Pytest
         run: python -m pytest tests/ -v
+
+  # Publish a release when a merge to main carries a version that has no tag
+  # yet: tag vX.Y.Z, create the GitHub release, and move the vX major tag that
+  # users reference (@v0). A merge that leaves the version unchanged is a no-op,
+  # so bump the version in pyproject.toml and src/answerable/__init__.py in the
+  # PR that should ship.
+  release:
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Read version
+        id: version
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          module=$(python -c 'import ast, pathlib; tree = ast.parse(pathlib.Path("src/answerable/__init__.py").read_text()); print(next(n.value.value for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "__version__"))')
+          if [ "$version" != "$module" ]; then
+            echo "::error::pyproject.toml version ($version) does not match __version__ ($module)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major=v${version%%.*}" >> "$GITHUB_OUTPUT"
+      - name: Create release
+        env:
+          # GITHUB_TOKEN by default. If GitHub refuses the tag updates (a tag
+          # ruleset, or workflow-file changes the token may not publish), add a
+          # RELEASE_TOKEN secret with contents and workflows write and re-run.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+          MAJOR: ${{ steps.version.outputs.major }}
+        # Every step is skipped when already done, so re-running a release that
+        # failed part-way (e.g. after the release exists but before the major
+        # tag moved) finishes it instead of reporting nothing to do.
+        run: |
+          ref_exists() { gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$1" --silent 2>/dev/null; }
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+          elif ref_exists "$TAG"; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --latest
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes --latest
+          fi
+
+          # Point the major tag at the release's commit, not this push's: a
+          # later merge that keeps the version must not move it past the release.
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          if ref_exists "$MAJOR"; then
+            current=$(gh api "repos/$GITHUB_REPOSITORY/commits/$MAJOR" --jq .sha)
+            if [ "$current" = "$sha" ]; then
+              echo "::notice::$TAG is released and $MAJOR already points at $sha"
+              exit 0
+            fi
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$MAJOR" -f sha="$sha" -F force=true --silent
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$MAJOR" -f sha="$sha" --silent
+          fi
+          echo "::notice::Released $TAG and moved $MAJOR to $sha"

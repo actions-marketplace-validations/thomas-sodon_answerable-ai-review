@@ -12,10 +12,11 @@ on:
   # <!-- answerable:overflow-ack --> marker, which raises only issue_comment.
   # That event runs on the default branch, so a check it reported would not
   # land on the PR; the overflow-ack job re-runs the PR's latest "replies"
-  # check instead. Resolving a thread raises no event at all: push, or re-run
+  # check instead. Edits and deletions count too, since they can take an
+  # answer back. Resolving a thread raises no event at all: push, or re-run
   # the check by hand.
   issue_comment:
-    types: [created, edited]
+    types: [created, edited, deleted]
 
 permissions:
   contents: read
@@ -38,15 +39,17 @@ jobs:
         with:
           mode: replies
 
-  # Re-run the PR's latest "replies" check when an overflow-ack comment lands,
-  # so the gate re-reads the PR with the acknowledgement. Only comments from
-  # people with write access start it, because it holds an actions: write
-  # token.
+  # Re-run the PR's latest "replies" check when an overflow-ack comment is
+  # posted, edited or deleted, so the gate re-reads the PR's current acks. An
+  # edit that removes the marker counts, through the comment's previous body.
+  # Only comments from people with write access start it, because it holds an
+  # actions: write token.
   overflow-ack:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '<!-- answerable:overflow-ack -->') &&
+      (contains(github.event.comment.body, '<!-- answerable:overflow-ack -->') ||
+       contains(github.event.changes.body.from, '<!-- answerable:overflow-ack -->')) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     permissions:
@@ -109,8 +112,19 @@ jobs:
             fi
             sleep 15
           done
-          if [ "$conclusion" != "failure" ]; then
-            echo "The replies check on $sha concluded '$conclusion'; nothing to re-run."
+          # Re-run whatever the check concluded: a passing gate must turn red
+          # when an ack is edited or deleted. A skipped check (its review was
+          # cancelled) would only skip again.
+          if [ "$conclusion" = "skipped" ]; then
+            echo "The replies check on $sha was skipped; nothing to re-run."
+            exit 0
+          fi
+          # A push during the wait makes $sha stale. Re-running its push-gate
+          # job would rejoin that workflow's concurrency group and cancel the
+          # new head's gate, which reads the acks itself.
+          head="$(gh pr view "$PR" --json headRefOid --jq .headRefOid)"
+          if [ "$head" != "$sha" ]; then
+            echo "PR #$PR moved from $sha to $head; the new head's gate reads the acks."
             exit 0
           fi
           # Re-runs this job alone; a review job it needs keeps its result.

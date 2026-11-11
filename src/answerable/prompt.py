@@ -187,3 +187,57 @@ Respond with JSON only — no surrounding text:
   ]
 }}\
 """
+
+
+FIX_CHECK_PROMPT = """\
+You are checking whether earlier findings on a GitHub pull request have been
+fixed. Earlier runs of an automated reviewer opened the review threads below,
+and they are still open. The repository you can read with the Read, Glob, and
+Grep tools is checked out at the pull request's current head, so it shows the
+code as it is now.
+
+If you decide a thread's defect is fixed, the thread is resolved
+automatically and it stops blocking the merge. A thread resolved by mistake
+hides a real defect. A thread left open by mistake only costs someone a reply.
+So mark a thread fixed only when you are sure.
+
+## PR Information
+Title: {pr_title}
+Description: {pr_body}
+
+## Current diff (base branch to current head)
+{diff}
+
+## Open review threads
+{threads}
+
+## Instructions
+For each thread, read the code it points at as it is now. Line numbers may
+have shifted, the code may have moved, and an outdated thread's line may no
+longer exist. Then decide one verdict:
+
+- ``fixed``: the defect the thread describes can no longer happen. The code
+  was changed to handle it, or the code was removed and nothing else still has
+  the same defect. Cite the current code that shows this. If the thread raises
+  more than one defect, every one of them must be fixed.
+- ``present``: the defect is still there, possibly at a different line or in
+  code that moved.
+- ``unsure``: you cannot tell, for example because the code is not readable,
+  the thread is too vague to check, or the fix is only partial.
+
+Do not mark a thread fixed only because its line changed, because a reply
+says it was fixed, or because the finding looks unconvincing to you. Judge
+only whether the defect the thread describes is still in the code. Give
+exactly one verdict per thread id.
+
+Respond with JSON only — no surrounding text:
+{{
+  "verdicts": [
+    {{
+      "id": 0,
+      "verdict": "fixed | present | unsure",
+      "reason": "One or two sentences citing the current code"
+    }}
+  ]
+}}\
+"""

@@ -42,6 +42,10 @@ inputs:
     description: "'true' runs a fresh Claude session that drops findings repeating feedback already on the PR (humans, other agents, earlier reviews); 'false' skips it."
     required: false
     default: "true"
+  resolve-fixed-threads:
+    description: "'true' runs a fresh Claude session that checks the reviewer's open threads against the current code and resolves the ones whose defect is gone; 'false' skips it."
+    required: false
+    default: "true"
   max-diff-chars:
     description: Maximum diff characters sent to the model (empty = tool default).
     required: false
@@ -82,6 +86,7 @@ runs:
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_VERIFY_FINDINGS: ${{ inputs.verify-findings }}
         INPUT_DEDUPE_FINDINGS: ${{ inputs.dedupe-findings }}
+        INPUT_RESOLVE_FIXED_THREADS: ${{ inputs.resolve-fixed-threads }}
         INPUT_MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         INPUT_MAX_FILES: ${{ inputs.max-files }}
         INPUT_GH_TIMEOUT: ${{ inputs.gh-timeout }}
@@ -108,6 +113,7 @@ runs:
         [ "$INPUT_DRY_RUN" = "true" ] && args+=(--dry-run)
         [ "$INPUT_VERIFY_FINDINGS" = "false" ] && args+=(--skip-verification)
         [ "$INPUT_DEDUPE_FINDINGS" = "false" ] && args+=(--skip-dedupe)
+        [ "$INPUT_RESOLVE_FIXED_THREADS" = "false" ] && args+=(--skip-resolve-fixed)
         [ -n "$INPUT_MAX_DIFF_CHARS" ] && args+=(--max-diff-chars "$INPUT_MAX_DIFF_CHARS")
         [ -n "$INPUT_MAX_FILES" ] && args+=(--max-files "$INPUT_MAX_FILES")
         [ -n "$INPUT_GH_TIMEOUT" ] && args+=(--gh-timeout "$INPUT_GH_TIMEOUT")

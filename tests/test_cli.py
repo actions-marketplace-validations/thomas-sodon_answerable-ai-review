@@ -34,6 +34,7 @@ class FakeResult:
     revised: list[object] = field(default_factory=list)
     duplicates: list[object] = field(default_factory=list)
     persisting: list[object] = field(default_factory=list)
+    fixed: list[object] = field(default_factory=list)
 
 
 @dataclass
@@ -496,6 +497,7 @@ class TestTomlConfigIntegration:
                 gh_timeout=review_pr_mod._DEFAULT_GH_TIMEOUT,
                 verify_findings=True,
                 dedupe_findings=True,
+                resolve_fixed=True,
             )
 
     def test_gh_timeout_cli_override(self) -> None:
@@ -518,6 +520,7 @@ class TestTomlConfigIntegration:
                 gh_timeout=60,
                 verify_findings=True,
                 dedupe_findings=True,
+                resolve_fixed=True,
             )
 
 
@@ -751,6 +754,7 @@ class TestTomlDefaultsNotFrozenAtImport:
                 gh_timeout=999,
                 verify_findings=True,
                 dedupe_findings=True,
+                resolve_fixed=True,
             )
 
 

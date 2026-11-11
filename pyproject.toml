@@ -1,6 +1,6 @@
 [project]
 name = "answerable"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI code review for GitHub pull requests that blocks the merge until every finding is answered"
 readme = "README.md"
 license = "MIT"

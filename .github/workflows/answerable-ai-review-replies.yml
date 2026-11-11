@@ -17,9 +17,12 @@ jobs:
   # Same job name as the push-triggered gate, so it updates the same check.
   replies:
     runs-on: ubuntu-latest
+    # A review with comments fires pull_request_review and
+    # pull_request_review_comment at once, and each reports its own check.
+    # Group by event so one event's run never cancels the other's, and let
+    # running jobs finish: a cancelled required check blocks the merge.
     concurrency:
-      group: answerable-replies-${{ github.event.pull_request.number }}-reply
-      cancel-in-progress: true
+      group: answerable-replies-${{ github.event.pull_request.number }}-${{ github.event_name }}
     steps:
       - name: Reply coverage
         uses: thomas-sodon/answerable-ai-review@ab20bdb0dbf2aa5b132ff1f4195e509331587645 # v0.1.0

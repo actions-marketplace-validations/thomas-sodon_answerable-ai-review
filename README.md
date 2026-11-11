@@ -36,15 +36,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      # Optional: fail if earlier findings are still unanswered. Run it before
-      # the review so it sees the state as of this push.
-      - uses: thomas-sodon/answerable-ai-review@v0
-        with:
-          mode: replies
       - uses: thomas-sodon/answerable-ai-review@v0
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # or: claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      # Optional: fail while any finding is still unanswered. Run it after the
+      # review so threads the review just resolved as fixed count as answered.
+      - uses: thomas-sodon/answerable-ai-review@v0
+        with:
+          mode: replies
 ```
 
 3. Open a pull request. Findings appear as inline review comments, and the job
@@ -75,6 +75,11 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
   that repeats one. A bug that repeats a *resolved* thread is still broken, so
   instead of being dropped it reopens that thread (see below). When unsure, it
   keeps the finding. Turn it off with `dedupe-findings: false`.
+- **Resolve what was fixed:** another fresh session reads the reviewer's open
+  threads against the current code and resolves each one whose defect is gone,
+  replying with the evidence. A thread that a finding from this run matches is
+  never resolved, and when the session is unsure the thread stays open. Turn
+  it off with `resolve-fixed-threads: false`.
 - **De-duplicate:** drops findings already tracked by an issue or matching an
   existing review thread, replies on and unresolves a resolved thread whose
   bug is still there (whoever opened the thread), and escalates disputed findings to a GitHub issue instead
@@ -96,7 +101,7 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
   credentials are unset rather than passed as blanks, and `mode: replies`
   needs no Anthropic credential at all.
 - **Least-privilege GitHub token.** The job needs `contents: read`,
-  `pull-requests: write` (to post reviews and reopen threads) and `issues: write` (only for the
+  `pull-requests: write` (to post reviews and to reopen or resolve threads) and `issues: write` (only for the
   disputed-finding escalation). It uses the workflow's `github.token` by
   default.
 - **Pin what holds your secret.** Because the action receives an Anthropic

@@ -6,6 +6,7 @@ Usage:
     answerable --repo owner/repo --pr 42 --require-comment-replies
     answerable --repo owner/repo --pr 42 --skip-verification
     answerable --repo owner/repo --pr 42 --skip-dedupe
+    answerable --repo owner/repo --pr 42 --skip-resolve-fixed
 
 Findings are adversarially verified before posting: a second agent session,
 fresh and sharing none of the reviewer's context, tries to disprove each one,
@@ -19,12 +20,17 @@ bug that repeats a *resolved* thread is still broken, so that thread gets a
 reply saying the defect persists and is unresolved instead.
 ``--skip-dedupe`` turns that pass off.
 
+Another fresh session checks the reviewer's open review threads against the
+current code. Threads whose defect is gone are resolved, with a reply saying
+why; threads this run's findings match again are never resolved. When unsure,
+the thread stays open. ``--skip-resolve-fixed`` turns that pass off.
+
 Exits 1 whenever the reviewer produces a comment — i.e. a finding of any
 severity (bug, suggestion, or nit) is newly posted, or a bug is flagged as
 persisting on a resolved thread — so the PR is blocked until those comments
 are addressed. Findings already tracked by open issues, escalated to issues,
 or matching an existing review thread are not freshly produced and do not
-affect the exit code. Infrastructure failures (API errors, SDK crashes) also
+affect the exit code, and neither do threads resolved as fixed. Infrastructure failures (API errors, SDK crashes) also
 exit 1 so CI surfaces broken review runs.
 
 With ``--require-comment-replies`` the diff review and posting are skipped
@@ -63,6 +69,8 @@ _DEFAULT_REQUIRE_COMMENT_REPLIES = 0
 _DEFAULT_VERIFY_FINDINGS = 1
 # Dedupe-against-existing-feedback default (1 = on).
 _DEFAULT_DEDUPE_FINDINGS = 1
+# Resolve-threads-whose-defect-is-fixed default (1 = on).
+_DEFAULT_RESOLVE_FIXED_THREADS = 1
 
 _CONFIG_KEYS: dict[str, int] = {
     "max_diff_chars": _DEFAULT_MAX_DIFF_CHARS,
@@ -71,6 +79,7 @@ _CONFIG_KEYS: dict[str, int] = {
     "require_comment_replies": _DEFAULT_REQUIRE_COMMENT_REPLIES,
     "verify_findings": _DEFAULT_VERIFY_FINDINGS,
     "dedupe_findings": _DEFAULT_DEDUPE_FINDINGS,
+    "resolve_fixed_threads": _DEFAULT_RESOLVE_FIXED_THREADS,
 }
 
 # Environment variable naming an explicit config file (searched first).
@@ -184,6 +193,17 @@ def main() -> None:
             "on the PR (from humans, other agents, or earlier reviews)"
         ),
     )
+    parser.add_argument(
+        "--skip-resolve-fixed",
+        action="store_true",
+        default=not toml_defaults.get(
+            "resolve_fixed_threads", _DEFAULT_RESOLVE_FIXED_THREADS,
+        ),
+        help=(
+            "Skip the session that resolves the reviewer's open threads whose "
+            "defect is no longer in the current code"
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -196,6 +216,7 @@ def main() -> None:
         gh_timeout=args.gh_timeout,
         verify_findings=not args.skip_verification,
         dedupe_findings=not args.skip_dedupe,
+        resolve_fixed=not args.skip_resolve_fixed,
     )
 
     if args.require_comment_replies:
@@ -249,6 +270,11 @@ def main() -> None:
         log.info(
             "Dedupe matched %d bug(s) to resolved threads they still affect",
             len(result.persisting),
+        )
+    if result.fixed:
+        log.info(
+            "Fix check found %d open thread(s) fixed in the current code",
+            len(result.fixed),
         )
 
     if args.dry_run:
@@ -310,6 +336,14 @@ def main() -> None:
                     f"  [{f.severity}] {f.file}:{f.line} — {f.title} "
                     f"(repeats {d.existing}): {d.reason}"
                 )
+        if result.fixed:
+            # Resolving a thread posts no finding, so it never fails the run.
+            print(f"Fixed in the current code (would resolve): {len(result.fixed)}")
+            for ft in result.fixed:
+                t = ft.thread
+                where = f"{t.path}:{t.line}" if t.line else t.path
+                title = _extract_thread_title(t.body or "") or "(untitled)"
+                print(f"  {where} — {title}: {ft.reason}")
         sys.exit(1 if has_findings else 0)
 
     try:
@@ -317,6 +351,7 @@ def main() -> None:
             args.pr, result.findings, result.summary,
             diff=result.diff or None,
             persisting=result.persisting,
+            fixed=result.fixed,
         )
     except Exception:
         log.exception("Failed to post review comment")
@@ -338,6 +373,12 @@ def main() -> None:
         log.info(
             "Skipped %d finding(s) already tracked by open issues",
             len(post_result.filtered),
+        )
+
+    if post_result.resolved:
+        log.info(
+            "Resolved %d review thread(s) whose defect is fixed",
+            len(post_result.resolved),
         )
 
     if post_result.skipped:

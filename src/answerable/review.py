@@ -12,10 +12,16 @@ from typing import TYPE_CHECKING, Any
 from answerable.github import GitHubClient, GitHubError
 from answerable.markers import (
     _ALL_COMMENT_TERMINAL_MARKERS,
+    _AUTO_RESOLVED_MARKER,
     _DEFECT_PERSISTS_MARKER,
     _DISAGREEMENT_MARKER,
 )
-from answerable.prompt import CODE_REVIEW_PROMPT, DEDUPE_FINDINGS_PROMPT, VERIFY_FINDINGS_PROMPT
+from answerable.prompt import (
+    CODE_REVIEW_PROMPT,
+    DEDUPE_FINDINGS_PROMPT,
+    FIX_CHECK_PROMPT,
+    VERIFY_FINDINGS_PROMPT,
+)
 from answerable.sdk import REVIEW_EFFORT, REVIEW_MODEL, QueryOptions, query
 
 if TYPE_CHECKING:
@@ -63,6 +69,10 @@ _THREAD_TITLE_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 # omitted (oldest kept first, matching GitHub's chronological order).
 _DEDUPE_ITEM_CHARS = 2_000
 _DEDUPE_TOTAL_CHARS = 60_000
+
+# Most characters of the fix-check session's reason quoted in the reply posted
+# when a thread is resolved automatically.
+_FIX_REASON_CHARS = 1_000
 
 # Overlap-coefficient threshold for treating two normalized titles as the
 # same finding (|A ∩ B| / min(|A|, |B|) >= threshold).
@@ -412,6 +422,8 @@ class DuplicateFinding:
     finding: ReviewFinding
     existing: str  # Human-readable label of the existing item it repeats
     reason: str
+    # The review thread it repeats, when the existing item is one (``T<n>``)
+    thread: ReviewThread | None = None
 
 
 @dataclass
@@ -429,6 +441,18 @@ class PersistingFinding:
 
 
 @dataclass
+class FixedThread:
+    """An open review thread the fix-check session found fixed in current code.
+
+    Not resolved yet: :meth:`PRReviewer.post_review` re-checks it against the
+    threads as they are at posting time, resolves it, and replies why.
+    """
+
+    thread: ReviewThread
+    reason: str
+
+
+@dataclass
 class ReviewResult:
     """Complete review output.
 
@@ -439,7 +463,9 @@ class ReviewResult:
     correction, whose ``revised`` finding is the one in ``findings``;
     ``duplicates`` holds findings the dedupe session matched to feedback
     already on the PR, which are never posted either; ``persisting`` holds
-    bugs it matched to a resolved thread, which posting reopens instead.
+    bugs it matched to a resolved thread, which posting reopens instead;
+    ``fixed`` holds open threads the fix-check session found fixed, which
+    posting resolves.
     """
 
     findings: list[ReviewFinding] = field(default_factory=list)
@@ -451,13 +477,14 @@ class ReviewResult:
     revised: list[RevisedFinding] = field(default_factory=list)
     duplicates: list[DuplicateFinding] = field(default_factory=list)
     persisting: list[PersistingFinding] = field(default_factory=list)
+    fixed: list[FixedThread] = field(default_factory=list)
 
 
 @dataclass
 class ReviewThread:
     """A PR review comment thread with resolution state."""
 
-    thread_id: str       # GraphQL node ID for unresolve mutation
+    thread_id: str       # GraphQL node ID for the resolve/unresolve mutations
     comment_id: int      # REST numeric ID for in_reply_to
     path: str            # File path
     body: str            # Root comment body text
@@ -478,6 +505,7 @@ class PostReviewResult:
     filtered: list[ReviewFinding]   # Findings skipped (tracked by issues)
     skipped: list[ReviewFinding]    # Findings skipped (existing unresolved threads)
     disputed: list[ReviewFinding] = field(default_factory=list)  # Findings escalated to issues after a disputing reply
+    resolved: list[ReviewThread] = field(default_factory=list)  # Fixed threads resolved with a reply
 
 
 @dataclass
@@ -486,7 +514,7 @@ class UnrepliedComments:
 
     Produced by :meth:`PRReviewer.find_unreplied_comments`.  ``inline`` holds open
     AI review threads (root matches :data:`_AI_FINDING_RE`, neither resolved nor
-    outdated, no reply); ``overflow`` holds overflow findings whose ``of-<hash>``
+    outdated, no reply, or last reply is the reviewer's own); ``overflow`` holds overflow findings whose ``of-<hash>``
     fingerprint is absent from the acknowledgement roll-up.  Both lists empty
     means every posted finding has been answered.
     """
@@ -540,10 +568,12 @@ class PRReviewer:
         code_host: CodeHost | None = None,
         verify_findings: bool = True,
         dedupe_findings: bool = True,
+        resolve_fixed: bool = True,
     ) -> None:
         self._repo = github_repo
         self._verify_findings = verify_findings
         self._dedupe_findings = dedupe_findings
+        self._resolve_fixed = resolve_fixed
         self._max_diff_chars = max_diff_chars
         self._max_files = max_files
         self._host = code_host or GitHubClient(
@@ -1000,6 +1030,8 @@ class PRReviewer:
             await self._verify(result, info, truncated_diff)
         if self._dedupe_findings and result.findings:
             await self._dedupe(pr_number, result)
+        if self._resolve_fixed:
+            await self._check_fixed(pr_number, result, info, truncated_diff)
         return result
 
     # ------------------------------------------------------------------
@@ -1231,8 +1263,325 @@ class PRReviewer:
             )
             result.duplicates.append(DuplicateFinding(
                 finding=finding, existing=labels[existing_id], reason=reason,
+                thread=thread,
             ))
         result.findings = kept
+
+    # ------------------------------------------------------------------
+    # Resolve threads whose defect is fixed (fresh session)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _last_reviewer_marker(thread: ReviewThread) -> str | None:
+        """Return the marker opening the reviewer's latest reply on *thread*.
+
+        Only the reviewer's own "defect persists" and "resolved automatically"
+        replies count.  ``None`` when *thread* carries neither.
+        """
+        for body in reversed(thread.reply_bodies):
+            for marker in (_DEFECT_PERSISTS_MARKER, _AUTO_RESOLVED_MARKER):
+                if body.startswith(marker):
+                    return marker
+        return None
+
+    @classmethod
+    def _is_fix_candidate(cls, thread: ReviewThread) -> bool:
+        """Return ``True`` if *thread* may be resolved once its defect is fixed.
+
+        The thread must be unresolved and carry no issue link (an issue tracks
+        it then, and closing that issue is a person's call).  It must also be
+        the reviewer's to close:
+
+        * its root is one of the reviewer's findings (:data:`_AI_FINDING_RE`),
+          and the reviewer has not already resolved it once — if its latest
+          reviewer reply is the "resolved automatically" one, someone
+          unresolved it since, and that decision stands; or
+        * its root is someone else's, but the reviewer's latest reply on it is
+          the "defect persists" one: the reviewer reopened it, so it may
+          resolve it again once the defect is gone.
+        """
+        if thread.is_resolved or not thread.thread_id or cls._thread_has_issue_link(thread):
+            return False
+        last = cls._last_reviewer_marker(thread)
+        if _AI_FINDING_RE.match(thread.body or ""):
+            return last != _AUTO_RESOLVED_MARKER
+        return last == _DEFECT_PERSISTS_MARKER
+
+    def _claimed_thread_ids(
+        self,
+        findings: list[ReviewFinding],
+        threads: list[ReviewThread],
+        duplicates: list[DuplicateFinding] | None = None,
+        persisting: list[PersistingFinding] | None = None,
+    ) -> set[str]:
+        """Return the IDs of threads this run's findings say are still broken.
+
+        A thread a current finding matches — by title
+        (:meth:`_match_finding_to_thread`), or because the dedupe session
+        matched a finding to it — describes a defect the reviewer just found
+        again, so it must not be resolved as fixed.
+        """
+        ids: set[str] = set()
+        for finding in findings:
+            thread = self._match_finding_to_thread(finding, threads)
+            if thread is not None:
+                ids.add(thread.thread_id)
+        for dup in duplicates or []:
+            if dup.thread is not None:
+                ids.add(dup.thread.thread_id)
+            thread = self._match_finding_to_thread(dup.finding, threads)
+            if thread is not None:
+                ids.add(thread.thread_id)
+        ids.update(p.thread.thread_id for p in persisting or [])
+        return ids
+
+    def _format_fix_candidates(
+        self, threads: list[ReviewThread],
+    ) -> tuple[str, list[ReviewThread]]:
+        """Render *threads* for the fix-check prompt; return the text and those shown.
+
+        Thread ``n`` in the text is ``shown[n]``.  Each thread is clipped to
+        :data:`_DEDUPE_ITEM_CHARS` and the whole list to
+        :data:`_DEDUPE_TOTAL_CHARS`; threads past the budget are left out and
+        stay open.
+        """
+        blocks: list[str] = []
+        shown: list[ReviewThread] = []
+        total = 0
+        for thread in threads:
+            where = f"{thread.path}:{thread.line}" if thread.line else thread.path or "(no path)"
+            state = " (outdated)" if thread.is_outdated else ""
+            parts = [thread.body or ""]
+            parts.extend(f"Reply: {r}" for r in thread.reply_bodies if r.strip())
+            text = self._clip("\n\n".join(p for p in parts if p.strip()), _DEDUPE_ITEM_CHARS)
+            block = f"### Thread {len(shown)} — {where}{state}\n{text}"
+            if total + len(block) > _DEDUPE_TOTAL_CHARS and shown:
+                logger.warning(
+                    "Fix-check context budget reached; leaving %d of %d open "
+                    "thread(s) unchecked",
+                    len(threads) - len(shown), len(threads),
+                )
+                break
+            blocks.append(block)
+            shown.append(thread)
+            total += len(block)
+        return "\n\n".join(blocks), shown
+
+    @staticmethod
+    def _parse_fix_verdicts(data: Any) -> dict[int, tuple[str, str]]:
+        """Map thread id → ``(verdict, reason)`` from the fix-check JSON.
+
+        Entries that are not dicts, carry a non-integer id, or name a verdict
+        other than ``fixed``/``present``/``unsure`` are skipped; the first
+        verdict for an id wins.
+        """
+        if isinstance(data, dict):
+            items = data.get("verdicts") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        verdicts: dict[int, tuple[str, str]] = {}
+        if not isinstance(items, list):
+            return verdicts
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("id")
+            if isinstance(raw_id, bool):
+                continue
+            try:
+                idx = int(raw_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if verdict not in ("fixed", "present", "unsure"):
+                continue
+            verdicts.setdefault(idx, (verdict, str(item.get("reason") or "").strip()))
+        return verdicts
+
+    async def _check_fixed(
+        self,
+        pr_number: int,
+        result: ReviewResult,
+        info: dict[str, str],
+        truncated_diff: str,
+    ) -> None:
+        """Find open review threads whose defect the current code no longer has.
+
+        Runs in its own fresh :func:`query` session, sharing no context with
+        the review, verification or dedupe sessions.  It sees the PR, the same
+        truncated diff, and every open thread :meth:`_is_fix_candidate`
+        accepts, except threads this run's findings match
+        (:meth:`_claimed_thread_ids`): the reviewer just found those defects
+        again.  It reads the current code with the same read-only tools and
+        answers ``fixed``, ``present`` or ``unsure`` per thread.  Threads
+        answered ``fixed`` with a reason go to ``result.fixed``, and
+        :meth:`post_review` resolves them.
+
+        Fails closed, since a wrongly resolved thread hides a real defect: a
+        failed fetch or query, an unparseable response, a missing verdict, or
+        a ``fixed`` verdict without a reason leaves the thread open.  Usage is
+        added to the result's totals.
+        """
+        try:
+            raw_threads = self._host.get_pr_review_threads(pr_number)
+            threads = self._parse_review_threads(raw_threads) if raw_threads else []
+        except Exception:
+            logger.warning(
+                "Failed to fetch review threads for the fix check; resolving none",
+                exc_info=True,
+            )
+            return
+        claimed = self._claimed_thread_ids(
+            result.findings, threads, result.duplicates, result.persisting,
+        )
+        candidates = [
+            t for t in threads
+            if self._is_fix_candidate(t) and t.thread_id not in claimed
+        ]
+        if not candidates:
+            return
+
+        thread_text, shown = self._format_fix_candidates(candidates)
+        prompt = FIX_CHECK_PROMPT.format(
+            pr_title=info["title"],
+            pr_body=info["body"] or "(no description)",
+            diff=truncated_diff,
+            threads=thread_text,
+        )
+        try:
+            sdk_result = await query(prompt=prompt, options=_review_query_options())
+        except Exception:
+            logger.warning(
+                "Fix-check session failed; leaving all %d open thread(s) open",
+                len(shown), exc_info=True,
+            )
+            return
+
+        result.tokens_used += sdk_result.usage.total_tokens
+        if sdk_result.usage.total_cost_usd is not None:
+            result.cost_usd = (result.cost_usd or 0.0) + sdk_result.usage.total_cost_usd
+
+        try:
+            verdicts = self._parse_fix_verdicts(sdk_result.parse_json())
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "Failed to parse fix-check JSON; leaving all %d open thread(s) open",
+                len(shown),
+            )
+            return
+
+        for idx, thread in enumerate(shown):
+            where = f"{thread.path}:{thread.line}" if thread.line else thread.path
+            title = _extract_thread_title(thread.body or "") or "(untitled)"
+            verdict, reason = verdicts.get(idx, ("", ""))
+            if verdict != "fixed":
+                logger.info(
+                    "Fix check left '%s' in %s open (%s)%s",
+                    title, where, verdict or "no verdict",
+                    f": {reason}" if reason else "",
+                )
+                continue
+            if not reason:
+                logger.warning(
+                    "Fix check marked '%s' in %s fixed without a reason; "
+                    "leaving it open", title, where,
+                )
+                continue
+            logger.info("Fix check found '%s' in %s fixed: %s", title, where, reason)
+            result.fixed.append(FixedThread(thread=thread, reason=reason))
+
+    def _resolve_fixed_threads(
+        self,
+        pr_number: int,
+        fixed: list[FixedThread],
+        threads: list[ReviewThread],
+        findings: list[ReviewFinding],
+    ) -> list[ReviewThread]:
+        """Resolve each *fixed* thread that is still eligible, then reply why.
+
+        The fix check saw the threads as they were during the review.  Each
+        entry is looked up again by ID in the freshly fetched *threads* and
+        skipped if it is gone, no longer :meth:`_is_fix_candidate` (resolved,
+        issue-linked, or reopened after an earlier automatic resolve), matched
+        by one of *findings*, or has replies it did not have when it was
+        checked — someone may have said it is not fixed.
+
+        The thread is resolved first and the reply posted only once that
+        succeeds, so a failed resolve leaves the thread exactly as it was for
+        the next run to retry.  The reply is the only record that the reviewer
+        resolved the thread, which is what stops a later run from resolving it
+        again after someone unresolves it.  So when the reply fails, the thread
+        is unresolved again and left for the next run to retry both steps.
+        Returns the threads resolved.
+        """
+        if not fixed:
+            return []
+        by_id = {t.thread_id: t for t in threads}
+        claimed = self._claimed_thread_ids(findings, threads)
+        resolved: list[ReviewThread] = []
+        resolved_ids: set[str] = set()
+        for entry in fixed:
+            thread = by_id.get(entry.thread.thread_id)
+            title = _extract_thread_title(entry.thread.body or "") or "(untitled)"
+            if (
+                thread is None
+                or thread.thread_id in resolved_ids
+                or thread.thread_id in claimed
+                or not self._is_fix_candidate(thread)
+                or thread.reply_bodies != entry.thread.reply_bodies
+            ):
+                logger.info(
+                    "Not resolving thread for '%s' in %s — it changed since "
+                    "the fix check or a finding matches it",
+                    title, entry.thread.path,
+                )
+                continue
+            if not self._host.resolve_review_thread(thread.thread_id):
+                logger.warning(
+                    "Could not resolve fixed thread for '%s' in %s; leaving it open",
+                    title, thread.path,
+                )
+                continue
+            reply_body = (
+                f"{_AUTO_RESOLVED_MARKER} in the current PR, so this thread "
+                f"was resolved.\n\n{self._clip(entry.reason, _FIX_REASON_CHARS)}"
+            )
+            try:
+                replied = self._host.reply_to_review_comment(
+                    pr_number, thread.comment_id, reply_body,
+                ) is not False
+            except Exception:
+                logger.debug("Reply on fixed thread raised", exc_info=True)
+                replied = False
+            if not replied:
+                # Without the marker reply a later run could not tell that the
+                # reviewer resolved this thread, and would resolve it again
+                # after someone unresolves it.  Undo the resolve instead.
+                if self._host.unresolve_review_thread(thread.thread_id):
+                    logger.warning(
+                        "Could not reply on fixed thread for '%s' in %s; "
+                        "unresolved it again for the next run to retry",
+                        title, thread.path,
+                    )
+                else:
+                    logger.warning(
+                        "Could not reply on fixed thread for '%s' in %s, nor "
+                        "unresolve it; it stays resolved without a reply",
+                        title, thread.path,
+                    )
+                continue
+            thread.reply_bodies.append(reply_body)
+            thread.all_bodies = (
+                f"{thread.all_bodies}\n{reply_body}" if thread.all_bodies
+                else reply_body
+            )
+            thread.is_resolved = True
+            logger.info("Resolved fixed thread for '%s' in %s", title, thread.path)
+            resolved_ids.add(thread.thread_id)
+            resolved.append(thread)
+        return resolved
 
     # ------------------------------------------------------------------
     # Adversarial verification (fresh session)
@@ -1717,6 +2066,7 @@ class PRReviewer:
         summary: str,
         diff: str | None = None,
         persisting: list[PersistingFinding] | None = None,
+        fixed: list[FixedThread] | None = None,
     ) -> PostReviewResult:
         """Post an inline review on the PR.
 
@@ -1731,9 +2081,13 @@ class PRReviewer:
         unresolved, exactly like a ``reopen`` from
         :meth:`_categorize_by_thread_state`.  One reply per thread.
 
+        *fixed* (from :attr:`ReviewResult.fixed`) are open threads the fix
+        check found fixed; each still eligible is resolved with a reply saying
+        why (:meth:`_resolve_fixed_threads`).
+
         Returns a :class:`PostReviewResult` describing what was posted,
         flagged as persisting on a resolved thread, filtered (tracked by
-        issues), and skipped (existing threads).
+        issues), skipped (existing threads), and resolved as fixed.
         """
         valid_lines: dict[str, set[int]] = (
             self._parse_diff_lines(diff) if diff else {}
@@ -1750,6 +2104,12 @@ class PRReviewer:
         # handler and the thread-state categorizer consume them.
         raw_threads = self._host.get_pr_review_threads(pr_number)
         threads = self._parse_review_threads(raw_threads) if raw_threads else []
+
+        # Resolve threads whose defect is gone, unless a finding of this run
+        # matches one.  Done first so no early return below skips it.
+        resolved = self._resolve_fixed_threads(
+            pr_number, fixed or [], threads, findings,
+        )
 
         # Escalate findings a thread reply previously disputed BEFORE filtering
         # by issue tracking.  If a finding's matching thread already has a
@@ -1779,7 +2139,7 @@ class PRReviewer:
             )
             return PostReviewResult(
                 posted=[], reopened=[], filtered=filtered, skipped=persist_skip,
-                disputed=disputed,
+                disputed=disputed, resolved=resolved,
             )
 
         # Categorize remaining findings by review thread state
@@ -1808,7 +2168,7 @@ class PRReviewer:
             return PostReviewResult(
                 posted=[], reopened=reopened_findings,
                 filtered=filtered, skipped=skip,
-                disputed=disputed,
+                disputed=disputed, resolved=resolved,
             )
 
         payload = self._build_review_payload(
@@ -1824,7 +2184,7 @@ class PRReviewer:
         return PostReviewResult(
             posted=new_findings, reopened=reopened_findings,
             filtered=filtered, skipped=skip,
-            disputed=disputed,
+            disputed=disputed, resolved=resolved,
         )
 
     def _recheck_persisting(
@@ -1887,13 +2247,19 @@ class PRReviewer:
           reviewer emits) and it carries no reply; or
         * its *last* reply is the reviewer's own "defect persists" reply
           (:data:`_DEFECT_PERSISTS_MARKER`) — the reviewer reopened it, on its
-          own thread or anyone else's, and nobody has answered since.  The
-          reviewer's reply must not count as the answer.
+          own thread or anyone else's, and nobody has answered since; or
+        * its *last* reply is the reviewer's own "resolved automatically" reply
+          (:data:`_AUTO_RESOLVED_MARKER`) — the reviewer resolved it as fixed,
+          someone unresolved it again, and nobody has said why.
+
+        The reviewer's own replies must not count as the answer.
         """
         if thread.is_resolved or thread.is_outdated:
             return False
         if thread.reply_bodies:
-            return thread.reply_bodies[-1].startswith(_DEFECT_PERSISTS_MARKER)
+            return thread.reply_bodies[-1].startswith(
+                (_DEFECT_PERSISTS_MARKER, _AUTO_RESOLVED_MARKER),
+            )
         return _AI_FINDING_RE.match(thread.body or "") is not None
 
     def _union_overflow_findings(self, pr_number: int) -> list[OverflowFinding]:

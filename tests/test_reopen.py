@@ -373,6 +373,7 @@ class _Result:
         self.revised: list[object] = []
         self.duplicates: list[object] = []
         self.persisting = persisting
+        self.fixed: list[object] = []
 
 
 ARGV = ["answerable", "--repo", "owner/repo", "--pr", "1"]

@@ -102,6 +102,13 @@ async def _run(
     return result, mock_query
 
 
+FORBIDDEN = json.dumps({
+    "data": {"resolveReviewThread": None},
+    "errors": [{"type": "FORBIDDEN", "path": ["resolveReviewThread"],
+                "message": "Resource not accessible by integration"}],
+})
+
+
 BUG = {"file": "app/a.py", "line": 2, "severity": "bug",
        "title": "Division by zero", "description": "y divides by zero",
        "fix_plan": "guard"}
@@ -144,10 +151,42 @@ class TestResolveReviewThread:
             assert client.resolve_review_thread("PRRT_1") is False
         assert "resolve review thread" in caplog.text
 
-    def test_gh_failure_returns_false(self) -> None:
+    def test_gh_failure_returns_false(self, caplog: pytest.LogCaptureFixture) -> None:
         client = GitHubClient(repo="owner/repo")
-        with patch.object(client, "_run", side_effect=GitHubError("boom")):
+        with (
+            patch.object(client, "_run", side_effect=GitHubError("boom")),
+            caplog.at_level(logging.WARNING),
+        ):
             assert client.resolve_review_thread("PRRT_1") is False
+        assert "contents: write" not in caplog.text
+
+    def test_forbidden_names_the_missing_permission(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A token with pull-requests: write but contents: read is refused as
+        FORBIDDEN; the warning says which permission to add."""
+        client, run = self._client_run(FORBIDDEN)
+        with patch.object(client, "_run", run), caplog.at_level(logging.WARNING):
+            assert client.resolve_review_thread("PRRT_1") is False
+        assert "needs contents: write" in caplog.text
+
+    def test_forbidden_gh_exit_names_the_missing_permission(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """``gh`` exits 1 on the FORBIDDEN response, so the hint must also come
+        from the raised error, which carries gh's stdout and stderr."""
+        client = GitHubClient(repo="owner/repo")
+        error = GitHubError(
+            "gh command failed (exit 1)\n"
+            "stderr: gh: Resource not accessible by integration\n"
+            f"stdout: {FORBIDDEN}",
+        )
+        with (
+            patch.object(client, "_run", side_effect=error),
+            caplog.at_level(logging.WARNING),
+        ):
+            assert client.resolve_review_thread("PRRT_1") is False
+        assert "needs contents: write" in caplog.text
 
     def test_empty_thread_id_is_a_no_op(self) -> None:
         client = GitHubClient(repo="owner/repo")
@@ -385,6 +424,7 @@ def test_resolve_failure_posts_no_reply(caplog: pytest.LogCaptureFixture) -> Non
         out = reviewer.post_review(1, [], "s", diff=DIFF, fixed=[_fixed_entry(node)])
 
     assert out.resolved == []
+    assert [t.thread_id for t in out.unresolvable] == ["PRRT_1"]
     host.reply_to_review_comment.assert_not_called()
     assert "Could not resolve fixed thread" in caplog.text
 
@@ -543,6 +583,38 @@ def test_cli_passes_fixed_and_resolving_does_not_fail_the_run(
     assert mock_cls.return_value.post_review.call_args.kwargs["fixed"] == [ft]
     assert mock_cls.call_args.kwargs["resolve_fixed"] is True
     assert "Resolved 1 review thread(s)" in caplog.text
+
+
+@pytest.mark.parametrize("in_actions", [True, False])
+def test_cli_reports_threads_it_could_not_resolve(
+    in_actions: bool,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused resolve leaves the fixed threads open. It does not fail the
+    run, but it is logged and, under GitHub Actions, annotated."""
+    if in_actions:
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    else:
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    ft = _fixed_entry(_node())
+    with (
+        patch.object(sys, "argv", ARGV),
+        patch("answerable.cli.PRReviewer") as mock_cls,
+        patch("answerable.cli.asyncio") as mock_asyncio,
+        caplog.at_level(logging.WARNING),
+    ):
+        mock_asyncio.run.return_value = _Result([ft])
+        mock_cls.return_value.post_review.return_value = PostReviewResult(
+            posted=[], reopened=[], filtered=[], skipped=[], unresolvable=[ft.thread],
+        )
+        cli.main()  # no SystemExit: exit 0
+
+    assert "Could not resolve 1 review thread(s)" in caplog.text
+    assert "contents: write" in caplog.text
+    out = capsys.readouterr().out
+    assert ("::warning title=Answerable::Could not resolve 1" in out) is in_actions
 
 
 def test_cli_dry_run_lists_threads_it_would_resolve(

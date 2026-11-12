@@ -17,8 +17,10 @@ Detailed behaviour of the CLI and the GitHub Action. For setup, see the
 | `ANTHROPIC_API_KEY` **or** `CLAUDE_CODE_OAUTH_TOKEN` | the review itself (not needed for `--require-comment-replies`) |
 | `GH_TOKEN` / `GITHUB_TOKEN` (or a `gh auth login` session) | reading the PR, posting reviews, opening escalation issues |
 
-The GitHub token needs `pull-requests: write` to post reviews, reply on threads and resolve or unresolve them, and
-`issues: write` for the disputed-finding escalation.
+The GitHub token needs `pull-requests: write` to post reviews and reply on threads, `contents: write` to resolve or
+unresolve them (GitHub refuses those mutations as FORBIDDEN, "Resource not accessible by integration", without it,
+even with `pull-requests: write`), and `issues: write` for the disputed-finding escalation. A refused resolve leaves
+the thread open and does not fail the run, but it is logged as a warning and, under GitHub Actions, annotated.
 
 ## CLI usage
 

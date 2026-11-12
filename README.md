@@ -25,7 +25,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write       # resolving a fixed thread needs it; nothing is pushed
   pull-requests: write
   issues: write
 
@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
       - uses: thomas-sodon/answerable-ai-review@v0
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -100,10 +101,15 @@ inputs are listed in [docs/REFERENCE.md](docs/REFERENCE.md#github-action-inputs)
   (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`). Empty
   credentials are unset rather than passed as blanks, and `mode: replies`
   needs no Anthropic credential at all.
-- **Least-privilege GitHub token.** The job needs `contents: read`,
-  `pull-requests: write` (to post reviews and to reopen or resolve threads) and `issues: write` (only for the
-  disputed-finding escalation). It uses the workflow's `github.token` by
-  default.
+- **Least-privilege GitHub token.** The job needs `pull-requests: write` (to
+  post reviews and reply on threads), `contents: write` (GitHub refuses to
+  resolve or unresolve a review thread for a token without it, even with
+  `pull-requests: write`; the reviewer never pushes) and `issues: write` (only
+  for the disputed-finding escalation). With `contents: read` the review still
+  runs, but fixed threads stay open and the run logs a warning. It uses the
+  workflow's `github.token` by default; check out with
+  `persist-credentials: false` so the write-capable token stays out of git
+  config. `mode: replies` needs only `contents: read` and `pull-requests: read`.
 - **Pin what holds your secret.** Because the action receives an Anthropic
   credential, pin it to a full commit SHA
   (`uses: thomas-sodon/answerable-ai-review@<commit-sha>`) so a later change to

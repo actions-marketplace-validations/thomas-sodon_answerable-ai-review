@@ -381,6 +381,19 @@ def main() -> None:
             len(post_result.resolved),
         )
 
+    # A refused resolve does not fail the run (resolving is best-effort), but
+    # it must not pass unnoticed either: the fixed threads stay open.
+    if post_result.unresolvable:
+        message = (
+            f"Could not resolve {len(post_result.unresolvable)} review thread(s) "
+            "whose defect is fixed; they stay open. If GitHub refused the "
+            "resolve as FORBIDDEN, give the token contents: write as well as "
+            "pull-requests: write."
+        )
+        log.warning("%s", message)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::warning title=Answerable::{message}", flush=True)
+
     if post_result.skipped:
         log.info(
             "Skipped %d finding(s) with existing review threads",

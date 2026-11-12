@@ -19,6 +19,24 @@ class GitHubError(Exception):
     """Raised when a GitHub CLI operation fails."""
 
 
+# GitHub refuses ``resolveReviewThread`` and ``unresolveReviewThread`` with
+# this FORBIDDEN error to a token that has ``pull-requests: write`` but only
+# ``contents: read``.
+_THREAD_PERMISSION_HINT = (
+    "; GitHub refused it as FORBIDDEN, so the token is missing a permission: "
+    "resolving or unresolving a review thread needs contents: write as well as "
+    "pull-requests: write"
+)
+
+
+def _thread_permission_hint(text: str) -> str:
+    """Return :data:`_THREAD_PERMISSION_HINT` if *text* is GitHub's refusal of
+    a thread mutation for lack of permission, else ``""``."""
+    if "Resource not accessible by integration" in text or '"FORBIDDEN"' in text:
+        return _THREAD_PERMISSION_HINT
+    return ""
+
+
 class CodeHost(Protocol):
     """Protocol for GitHub review operations — allows test doubles."""
 
@@ -386,14 +404,16 @@ class GitHubClient:
             data = json.loads(result.stdout or "{}")
             if not isinstance(data, dict) or data.get("errors") or data.get("data") is None:
                 logger.warning(
-                    "GraphQL refused to unresolve review thread %s: %.500s",
+                    "GraphQL refused to unresolve review thread %s: %.500s%s",
                     thread_id, result.stdout,
+                    _thread_permission_hint(str(result.stdout or "")),
                 )
                 return False
             return True
-        except (GitHubError, json.JSONDecodeError, AttributeError, TypeError):
+        except (GitHubError, json.JSONDecodeError, AttributeError, TypeError) as exc:
             logger.warning(
-                "Failed to unresolve review thread %s", thread_id, exc_info=True,
+                "Failed to unresolve review thread %s%s", thread_id,
+                _thread_permission_hint(str(exc)), exc_info=True,
             )
             return False
 
@@ -424,14 +444,16 @@ class GitHubClient:
             )
             if not isinstance(data, dict) or data.get("errors") or thread.get("isResolved") is not True:
                 logger.warning(
-                    "GraphQL refused to resolve review thread %s: %.500s",
+                    "GraphQL refused to resolve review thread %s: %.500s%s",
                     thread_id, result.stdout,
+                    _thread_permission_hint(str(result.stdout or "")),
                 )
                 return False
             return True
-        except (GitHubError, json.JSONDecodeError, AttributeError, TypeError):
+        except (GitHubError, json.JSONDecodeError, AttributeError, TypeError) as exc:
             logger.warning(
-                "Failed to resolve review thread %s", thread_id, exc_info=True,
+                "Failed to resolve review thread %s%s", thread_id,
+                _thread_permission_hint(str(exc)), exc_info=True,
             )
             return False
 

@@ -22,10 +22,17 @@ jobs:
     concurrency:
       group: answerable-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
+    # contents: write only so GitHub lets it resolve fixed threads; it never
+    # pushes, and persist-credentials: false keeps the token out of git config.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
       - name: Review
         uses: thomas-sodon/answerable-ai-review@ab20bdb0dbf2aa5b132ff1f4195e509331587645 # v0.1.0
         with:

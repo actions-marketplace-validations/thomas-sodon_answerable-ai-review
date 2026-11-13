@@ -2,6 +2,11 @@ queue_rules:
   - name: default
     queue_conditions:
       - base = main
+    merge_conditions:
+      - check-success = quality (3.11)
+      - check-success = quality (3.12)
+      - check-success = quality (3.13)
+      - check-success = quality (3.14)
     merge_method: squash
 merge_queue:
   max_parallel_checks: 1

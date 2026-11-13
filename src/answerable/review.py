@@ -506,6 +506,7 @@ class PostReviewResult:
     skipped: list[ReviewFinding]    # Findings skipped (existing unresolved threads)
     disputed: list[ReviewFinding] = field(default_factory=list)  # Findings escalated to issues after a disputing reply
     resolved: list[ReviewThread] = field(default_factory=list)  # Fixed threads resolved with a reply
+    unresolvable: list[ReviewThread] = field(default_factory=list)  # Fixed threads GitHub refused to resolve
 
 
 @dataclass
@@ -1498,7 +1499,7 @@ class PRReviewer:
         fixed: list[FixedThread],
         threads: list[ReviewThread],
         findings: list[ReviewFinding],
-    ) -> list[ReviewThread]:
+    ) -> tuple[list[ReviewThread], list[ReviewThread]]:
         """Resolve each *fixed* thread that is still eligible, then reply why.
 
         The fix check saw the threads as they were during the review.  Each
@@ -1514,13 +1515,15 @@ class PRReviewer:
         resolved the thread, which is what stops a later run from resolving it
         again after someone unresolves it.  So when the reply fails, the thread
         is unresolved again and left for the next run to retry both steps.
-        Returns the threads resolved.
+        Returns the threads resolved, and the threads GitHub refused to resolve
+        (left open, so the caller can report them rather than pass silently).
         """
         if not fixed:
-            return []
+            return [], []
         by_id = {t.thread_id: t for t in threads}
         claimed = self._claimed_thread_ids(findings, threads)
         resolved: list[ReviewThread] = []
+        unresolvable: list[ReviewThread] = []
         resolved_ids: set[str] = set()
         for entry in fixed:
             thread = by_id.get(entry.thread.thread_id)
@@ -1543,6 +1546,7 @@ class PRReviewer:
                     "Could not resolve fixed thread for '%s' in %s; leaving it open",
                     title, thread.path,
                 )
+                unresolvable.append(thread)
                 continue
             reply_body = (
                 f"{_AUTO_RESOLVED_MARKER} in the current PR, so this thread "
@@ -1581,7 +1585,7 @@ class PRReviewer:
             logger.info("Resolved fixed thread for '%s' in %s", title, thread.path)
             resolved_ids.add(thread.thread_id)
             resolved.append(thread)
-        return resolved
+        return resolved, unresolvable
 
     # ------------------------------------------------------------------
     # Adversarial verification (fresh session)
@@ -2107,7 +2111,7 @@ class PRReviewer:
 
         # Resolve threads whose defect is gone, unless a finding of this run
         # matches one.  Done first so no early return below skips it.
-        resolved = self._resolve_fixed_threads(
+        resolved, unresolvable = self._resolve_fixed_threads(
             pr_number, fixed or [], threads, findings,
         )
 
@@ -2140,6 +2144,7 @@ class PRReviewer:
             return PostReviewResult(
                 posted=[], reopened=[], filtered=filtered, skipped=persist_skip,
                 disputed=disputed, resolved=resolved,
+                unresolvable=unresolvable,
             )
 
         # Categorize remaining findings by review thread state
@@ -2169,6 +2174,7 @@ class PRReviewer:
                 posted=[], reopened=reopened_findings,
                 filtered=filtered, skipped=skip,
                 disputed=disputed, resolved=resolved,
+                unresolvable=unresolvable,
             )
 
         payload = self._build_review_payload(
@@ -2185,6 +2191,7 @@ class PRReviewer:
             posted=new_findings, reopened=reopened_findings,
             filtered=filtered, skipped=skip,
             disputed=disputed, resolved=resolved,
+            unresolvable=unresolvable,
         )
 
     def _recheck_persisting(

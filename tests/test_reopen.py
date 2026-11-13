@@ -96,6 +96,31 @@ class TestUnresolveReviewThread:
         with patch.object(client, "_run", run), caplog.at_level(logging.WARNING):
             assert client.unresolve_review_thread("PRRT_1") is False
         assert "refused to unresolve" in caplog.text
+        assert "contents: write" not in caplog.text
+
+    def test_forbidden_names_the_missing_permission(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, run = self._client_run(json.dumps({
+            "data": {"unresolveReviewThread": None},
+            "errors": [{"type": "FORBIDDEN",
+                        "message": "Resource not accessible by integration"}],
+        }))
+        with patch.object(client, "_run", run), caplog.at_level(logging.WARNING):
+            assert client.unresolve_review_thread("PRRT_1") is False
+        assert "needs contents: write" in caplog.text
+
+    def test_forbidden_gh_exit_names_the_missing_permission(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client = GitHubClient(repo="owner/repo")
+        error = GitHubError("stderr: gh: Resource not accessible by integration")
+        with (
+            patch.object(client, "_run", side_effect=error),
+            caplog.at_level(logging.WARNING),
+        ):
+            assert client.unresolve_review_thread("PRRT_1") is False
+        assert "needs contents: write" in caplog.text
 
     def test_gh_failure_returns_false(self) -> None:
         client = GitHubClient(repo="owner/repo")
